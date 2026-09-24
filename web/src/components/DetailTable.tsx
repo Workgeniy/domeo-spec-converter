@@ -42,12 +42,16 @@ export function DetailTable() {
           <Select placeholder="Документ" data={docOptions} value={docCode} onChange={(v) => setDocCode(v === null ? null : String(v))} clearable w={220} size="sm" />
         )}
         <Select placeholder="Помещение / раздел" data={roomOptions} value={room} onChange={(v) => setRoom(v === null ? null : String(v))} clearable searchable w={340} size="sm" />
+        {pages > 1 && <Pagination total={pages} value={page} onChange={setPage} size="sm" />}
         <Text size="sm" c="dimmed">
-          Строк: {visible.length}
+          {pages > 1
+            ? `строки ${(page - 1) * PAGE_SIZE + 1}–${Math.min(page * PAGE_SIZE, visible.length)} из ${visible.length}`
+            : `Строк: ${visible.length}`}
         </Text>
       </Group>
-      <Table.ScrollContainer minWidth={1300} mah="calc(100vh - 400px)">
-        <Table striped highlightOnHover withTableBorder withColumnBorders stickyHeader fz="sm" layout="fixed">
+      {/* Без ограничения высоты: прокручивается вся страница, а не таблица внутри страницы. */}
+      <Table.ScrollContainer minWidth={1300}>
+        <Table striped highlightOnHover withTableBorder withColumnBorders fz="sm" layout="fixed">
           <colgroup>
             {[...(docOptions.length > 1 ? [130] : []), 56, 220, 80, null, 160, 140, 64, 70, 180].map((w, i) => (
               <col key={i} style={w ? { width: w } : undefined} />

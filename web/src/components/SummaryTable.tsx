@@ -125,8 +125,10 @@ export function SummaryTable() {
             ]}
           />
         </Group>
-        <Group gap="sm" align="flex-end" mt="sm" wrap="wrap">
+        <Group gap="sm" align="center" mt="sm" wrap="wrap">
+          {pages > 1 && <Pagination total={pages} value={currentPage} onChange={setPage} size="sm" />}
           <Text size="sm" c="dimmed">
+            {pages > 1 && `строки ${(currentPage - 1) * PAGE_SIZE + 1}–${Math.min(currentPage * PAGE_SIZE, visible.length)} из ${visible.length} · `}
             Выбрано: {selectedKeys.length}
           </Text>
           <Autocomplete size="xs" placeholder="раздел для выбранных" data={sections} value={bulkSection} onChange={setBulkSection} w={300} limit={20} disabled={selectedKeys.length === 0} />
@@ -142,8 +144,9 @@ export function SummaryTable() {
         </Group>
       </Paper>
 
-      <Table.ScrollContainer minWidth={1560} mah="calc(100vh - 420px)">
-        <Table striped={false} highlightOnHover withTableBorder withColumnBorders stickyHeader fz="sm" layout="fixed" verticalSpacing={4}>
+      {/* Без ограничения высоты: прокручивается вся страница, а не таблица внутри страницы. */}
+      <Table.ScrollContainer minWidth={1560}>
+        <Table striped={false} highlightOnHover withTableBorder withColumnBorders fz="sm" layout="fixed" verticalSpacing={4}>
           {/* Ширины через colgroup: в фиксированной раскладке ширины на th браузер здесь не учитывает. */}
           <colgroup>
             {SUMMARY_COLUMNS.map((w, i) => (

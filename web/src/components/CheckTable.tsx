@@ -85,8 +85,8 @@ export function CheckTable() {
           Замечаний нет: все строки прочитаны с позицией, единицей и количеством.
         </Alert>
       ) : (
-        <Table.ScrollContainer minWidth={700} mah="50vh">
-          <Table striped withTableBorder withColumnBorders stickyHeader fz="sm">
+        <Table.ScrollContainer minWidth={700}>
+          <Table striped withTableBorder withColumnBorders fz="sm">
             <Table.Thead>
               <Table.Tr>
                 <Table.Th style={{ width: 220 }}>Где</Table.Th>
