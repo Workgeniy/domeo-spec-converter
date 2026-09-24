@@ -99,7 +99,7 @@ export const useWorkspace = create<WorkspaceState>()(
           // v2 хранил подписанта одной строкой (director); теперь должность и подпись раздельно.
           const upgrade = (p: Partial<Party> & { director?: string }): Party => ({
             name: p.name ?? '',
-            position: p.position ?? p.director ?? 'Генеральный директор',
+            position: p.position || p.director || 'Генеральный директор',
             signatory: p.signatory ?? '',
             contacts: p.contacts ?? '',
           })
