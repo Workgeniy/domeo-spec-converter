@@ -11,7 +11,6 @@ import { CheckTable } from './CheckTable'
 import { DetailTable } from './DetailTable'
 import { formatMoney } from './format'
 import { KpPanel } from './KpPanel'
-import { PipelineBar } from './PipelineBar'
 import { SummaryTable } from './SummaryTable'
 import { UploadPane } from './UploadPane'
 
@@ -149,8 +148,6 @@ export function WorkspaceView() {
           </div>
         </Collapse>
       </Paper>
-
-      <PipelineBar />
 
       <Tabs defaultValue="summary" keepMounted={false}>
         <Tabs.List>
