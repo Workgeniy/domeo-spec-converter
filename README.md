@@ -87,6 +87,22 @@ cd core
 python -m app.cli "путь/к/тому-ТХ.pdf" результат.xlsx
 ```
 
+## Стенд на ВМ
+
+`deploy/` — compose из трёх контейнеров: `core` (Python + Tesseract), `api` (ASP.NET Core со
+встроенным фронтом), `edge` (nginx с basic auth, лимитами и наружным портом). Выкат:
+
+```bash
+deploy/deploy.sh
+```
+
+Образы собираются локально (нужен Docker Desktop) и уезжают на ВМ через
+`docker save | ssh docker load` — реестр не нужен. Хост и порт: `DEPLOY_HOST` (по умолчанию
+`testvm` из `~/.ssh/config`), `EDGE_PORT` (8090). Первый выкат создаёт на ВМ `.htpasswd` со
+случайным паролем и печатает его один раз; сменить —
+`ssh testvm 'cd ~/domeo/spec && printf "domeo:%s\n" "$(openssl passwd -apr1)" > .htpasswd'`.
+Логи: `ssh testvm 'cd ~/domeo/spec && docker compose logs --tail 100'`.
+
 ## OCR для сканов
 
 Нужен Tesseract с русским языком: Windows — установщик UB-Mannheim

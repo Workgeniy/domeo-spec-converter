@@ -33,3 +33,7 @@ Thumbs.db
 .idea/
 .vs/
 *.log
+
+# ---- стенд (deploy/) ----
+deploy/.htpasswd
+deploy/.env

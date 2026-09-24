@@ -1,0 +1,13 @@
+# Контекст сборки api/Dockerfile — корень репозитория; лишнее не отправляем в docker.
+.git/
+docs/
+core/
+deploy/
+**/node_modules/
+web/dist/
+**/bin/
+**/obj/
+**/.vs/
+**/TestResults/
+*.md
+dev.cmd

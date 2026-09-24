@@ -51,9 +51,11 @@ if (app.Environment.IsDevelopment())
 
 app.MapControllers();
 
-// Собранный фронт (web/dist) раздаётся этим же процессом; в разработке фронт живёт на Vite
-// и проксирует /api сюда. Всё, что не /api и не файл, — SPA.
-var webDist = Path.GetFullPath(Path.Combine(app.Environment.ContentRootPath, "..", "..", "..", "web", "dist"));
+// Собранный фронт раздаётся этим же процессом; в разработке фронт живёт на Vite и проксирует
+// /api сюда. Путь к сборке — Web:DistPath (в образе /app/wwwroot), по умолчанию web/dist
+// рядом с репозиторием. Всё, что не /api и не файл, — SPA.
+var webDist = app.Configuration["Web:DistPath"]
+              ?? Path.GetFullPath(Path.Combine(app.Environment.ContentRootPath, "..", "..", "..", "web", "dist"));
 if (Directory.Exists(webDist))
 {
     var files = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(webDist);

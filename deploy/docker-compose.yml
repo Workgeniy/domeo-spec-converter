@@ -1,0 +1,47 @@
+# Стенд на ВМ: три контейнера, наружу смотрит только nginx-край с basic auth.
+#   edge (nginx, :EDGE_PORT) → api (ASP.NET Core + фронт, :8080) → core (Python, :8000)
+# Образы собираются локально и доставляются на ВМ скриптом deploy.sh; TAG и EDGE_PORT
+# приезжают в .env рядом с этим файлом.
+
+services:
+  core:
+    image: domeo-spec-core:${TAG:-latest}
+    build:
+      context: ../core
+    restart: unless-stopped
+    # Разбор 100-страничного тома — до ~500 МБ; ВМ на 4 ГБ делит память с соседями.
+    mem_limit: 1200m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  api:
+    image: domeo-spec-api:${TAG:-latest}
+    build:
+      context: ..
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Engine__BaseUrl: http://core:8000
+      Engine__TimeoutSeconds: "600"
+    depends_on:
+      - core
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  edge:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${EDGE_PORT:-8090}:8080"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./.htpasswd:/etc/nginx/.htpasswd:ro
+    depends_on:
+      - api
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
