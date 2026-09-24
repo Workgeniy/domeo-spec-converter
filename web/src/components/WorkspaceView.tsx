@@ -112,20 +112,21 @@ export function WorkspaceView() {
             </Button>
             {documents.length === 1 ? (
               <Button leftSection={<IconDownload size={16} />} loading={downloading} onClick={() => download(documents)}>
-                Скачать Excel
+                Сформировать КП (Excel)
               </Button>
             ) : (
-              <Menu shadow="md" width={320}>
+              <Menu shadow="md" width={340}>
                 <Menu.Target>
                   <Button leftSection={<IconDownload size={16} />} rightSection={<IconChevronDown size={14} />} loading={downloading}>
-                    Скачать Excel
+                    Сформировать КП (Excel)
                   </Button>
                 </Menu.Target>
                 <Menu.Dropdown>
                   <Menu.Item onClick={() => download(documents)} fw={600}>
-                    Общий по объекту (все документы)
+                    По объекту целиком (все тома)
                   </Menu.Item>
                   <Menu.Divider />
+                  <Menu.Label>Только один том</Menu.Label>
                   {documents.map((d) => (
                     <Menu.Item key={d.id} onClick={() => download([d])}>
                       {d.doc.doc_code || d.doc.file_name}

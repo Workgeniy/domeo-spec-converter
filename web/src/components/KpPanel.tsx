@@ -1,4 +1,4 @@
-import { Alert, Button, Fieldset, Group, NumberInput, Paper, Select, SimpleGrid, Stack, Switch, Table, Text, TextInput, Textarea } from '@mantine/core'
+import { Alert, Button, Fieldset, Group, NumberInput, Paper, Select, SimpleGrid, Stack, Switch, Text, TextInput, Textarea } from '@mantine/core'
 import { IconAlertTriangle, IconFileDownload } from '@tabler/icons-react'
 import { useMemo } from 'react'
 
@@ -20,6 +20,19 @@ const VAT_OPTIONS = [
 
 function toNumber(value: number | string, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function Stat({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+  return (
+    <div>
+      <Text size="xs" c="dimmed">
+        {label}
+      </Text>
+      <Text size={strong ? 'lg' : 'sm'} fw={strong ? 700 : 500}>
+        {value}
+      </Text>
+    </div>
+  )
 }
 
 export function KpPanel({ onDownload, downloading }: Props) {
@@ -54,8 +67,38 @@ export function KpPanel({ onDownload, downloading }: Props) {
   }
 
   return (
-    <SimpleGrid cols={{ base: 1, lg: 3 }} spacing="md">
-      <Stack gap="md" style={{ gridColumn: 'span 2' }}>
+    <Stack gap="md">
+      {/* Итоги и кнопка — первыми, чтобы не искать их под формой. */}
+      <Paper withBorder p="md">
+        <Group justify="space-between" align="center" wrap="wrap" gap="lg">
+          <Group gap="xl" wrap="wrap">
+            <Stat label="Позиций в КП" value={`${totals.positions}`} />
+            <Stat label="С ценой" value={`${totals.priced} из ${totals.positions}`} />
+            <Stat label="Товар без НДС" value={formatMoney(totals.goodsWithoutVat)} />
+            <Stat label="НДС" value={formatMoney(totals.vat)} />
+            <Stat label="Товар с НДС" value={formatMoney(totals.goodsWithVat)} />
+            <Stat label="СМР с НДС" value={formatMoney(totals.installation)} />
+            <Stat label="Доставка" value={formatMoney(totals.delivery)} />
+            <Stat label="Итого по КП, с НДС" value={`${formatMoney(totals.total)} ₽`} strong />
+          </Group>
+          <Button size="lg" leftSection={<IconFileDownload size={20} />} loading={downloading} onClick={onDownload} disabled={documents.length === 0}>
+            Сформировать КП (Excel)
+          </Button>
+        </Group>
+        <Text size="xs" c="dimmed" mt="sm">
+          В файле: лист «КП» (титул, итоги по разделам, условия, подписи), «Спецификация» по форме приложения к договору с ценами, «По помещениям»
+          и «Проверка». Итоги в Excel — формулами, правки цен в файле пересчитываются.
+        </Text>
+      </Paper>
+
+      {unpriced > 0 && (
+        <Alert color="yellow" icon={<IconAlertTriangle size={18} />} title={`Без цены: ${unpriced} из ${totals.positions}`}>
+          Эти позиции попадут в спецификацию с пустой ценой и не войдут в итоги. Проставьте базовую цену в своде (фильтр «Без цены») или
+          исключите их из КП.
+        </Alert>
+      )}
+
+      <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
         <Fieldset legend="Предложение">
           <Group grow align="flex-start">
             <TextInput label="Номер КП" placeholder="КП-2026-017" value={kp.number} onChange={(e) => setKp({ number: e.currentTarget.value })} />
@@ -73,11 +116,6 @@ export function KpPanel({ onDownload, downloading }: Props) {
           </Group>
         </Fieldset>
 
-        <SimpleGrid cols={{ base: 1, md: 2 }}>
-          {party('supplier', 'Поставщик (мы)')}
-          {party('customer', 'Заказчик')}
-        </SimpleGrid>
-
         <Fieldset legend="Правила расчёта">
           <Text size="xs" c="dimmed" mb="xs">
             Цена в КП = базовая цена × (1 + наценка); СМР — процент от цены в КП, идёт в графу K; доставка — отдельной строкой в итогах.
@@ -91,79 +129,13 @@ export function KpPanel({ onDownload, downloading }: Props) {
           <Switch mt="sm" label="Округлять цены в КП до рубля" checked={kp.round_to_ruble} onChange={(e) => setKp({ round_to_ruble: e.currentTarget.checked })} />
         </Fieldset>
 
-        <Fieldset legend="Условия">
-          <Textarea
-            autosize
-            minRows={3}
-            placeholder="Срок поставки, порядок оплаты, гарантия, монтаж…"
-            value={kp.terms}
-            onChange={(e) => setKp({ terms: e.currentTarget.value })}
-          />
-        </Fieldset>
-      </Stack>
+        {party('supplier', 'Поставщик (мы)')}
+        {party('customer', 'Заказчик')}
+      </SimpleGrid>
 
-      <Stack gap="md">
-        <Paper withBorder p="md">
-          <Text fw={700} mb="xs">
-            Итоги предложения
-          </Text>
-          <Table fz="sm" withRowBorders={false} verticalSpacing={4}>
-            <Table.Tbody>
-              <Table.Tr>
-                <Table.Td>Позиций в КП</Table.Td>
-                <Table.Td ta="right">{totals.positions}</Table.Td>
-              </Table.Tr>
-              <Table.Tr>
-                <Table.Td>С ценой</Table.Td>
-                <Table.Td ta="right">{totals.priced}</Table.Td>
-              </Table.Tr>
-              <Table.Tr>
-                <Table.Td>Товар без НДС</Table.Td>
-                <Table.Td ta="right">{formatMoney(totals.goodsWithoutVat)}</Table.Td>
-              </Table.Tr>
-              <Table.Tr>
-                <Table.Td>НДС</Table.Td>
-                <Table.Td ta="right">{formatMoney(totals.vat)}</Table.Td>
-              </Table.Tr>
-              <Table.Tr>
-                <Table.Td>Товар с НДС</Table.Td>
-                <Table.Td ta="right">{formatMoney(totals.goodsWithVat)}</Table.Td>
-              </Table.Tr>
-              <Table.Tr>
-                <Table.Td>СМР с НДС</Table.Td>
-                <Table.Td ta="right">{formatMoney(totals.installation)}</Table.Td>
-              </Table.Tr>
-              <Table.Tr>
-                <Table.Td>Доставка</Table.Td>
-                <Table.Td ta="right">{formatMoney(totals.delivery)}</Table.Td>
-              </Table.Tr>
-              <Table.Tr>
-                <Table.Td>
-                  <Text fw={700}>Итого по КП, с НДС</Text>
-                </Table.Td>
-                <Table.Td ta="right">
-                  <Text fw={700}>{formatMoney(totals.total)}</Text>
-                </Table.Td>
-              </Table.Tr>
-            </Table.Tbody>
-          </Table>
-        </Paper>
-
-        {unpriced > 0 && (
-          <Alert color="yellow" icon={<IconAlertTriangle size={18} />} title={`Без цены: ${unpriced} из ${totals.positions}`}>
-            Эти позиции попадут в спецификацию с пустой ценой и не войдут в итоги. Проставьте базовую цену в своде (фильтр «Без цены»)
-            или исключите их из КП.
-          </Alert>
-        )}
-
-        <Button size="md" leftSection={<IconFileDownload size={18} />} loading={downloading} onClick={onDownload} disabled={documents.length === 0}>
-          Сформировать КП (Excel)
-        </Button>
-        <Text size="xs" c="dimmed">
-          В файле: лист «КП» (титул, итоги по разделам, условия, подписи), «Спецификация» по форме приложения к договору с ценами,
-          «По помещениям» и «Проверка». Итоги в Excel — формулами, правки цен в файле пересчитываются.
-        </Text>
-      </Stack>
-    </SimpleGrid>
+      <Fieldset legend="Условия">
+        <Textarea autosize minRows={3} placeholder="Срок поставки, порядок оплаты, гарантия, монтаж…" value={kp.terms} onChange={(e) => setKp({ terms: e.currentTarget.value })} />
+      </Fieldset>
+    </Stack>
   )
 }
