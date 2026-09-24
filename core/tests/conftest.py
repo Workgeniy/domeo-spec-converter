@@ -78,9 +78,9 @@ def synthetic_spec_pdf(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def synthetic_scan_pdf(synthetic_spec_pdf: Path, tmp_path: Path) -> Path:
-    """Тот же документ, но как картинка без текстового слоя (имитация скана)."""
+    """Тот же документ, но как картинка без текстового слоя (имитация скана 300 dpi)."""
     src = pymupdf.open(synthetic_spec_pdf)
-    pix = src[0].get_pixmap(dpi=200)
+    pix = src[0].get_pixmap(dpi=300)
     out = pymupdf.open()
     page = out.new_page(width=src[0].rect.width, height=src[0].rect.height)
     page.insert_image(page.rect, pixmap=pix)

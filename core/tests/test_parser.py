@@ -3,9 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pymupdf
+import pytest
+from PIL import Image
 
 from app.parsing.geometry import Word
-from app.parsing.ocr import TesseractProvider, detect_rules, ocr_page
+from app.parsing.ocr import OCR_DPI, Region, TesseractProvider, detect_rules, grid_cells
 from app.parsing.pdf_reader import read_page
 from app.parsing.spec_parser import parse_pdf, parse_qty, short_name
 from app.parsing.table import detect_layout
@@ -38,21 +40,52 @@ def test_scan_without_ocr_is_reported(synthetic_scan_pdf: Path) -> None:
 
 
 def test_scan_with_fake_ocr(synthetic_spec_pdf: Path, synthetic_scan_pdf: Path) -> None:
-    """Скан проходит общий конвейер: слова от OCR, линии — с растра."""
+    """Скан проходит общий конвейер: слова от OCR по ячейкам сетки, линии — с растра."""
     text_words = read_page(pymupdf.open(synthetic_spec_pdf)[0], 1).words
+    k = OCR_DPI / 72  # пункты страницы → пиксели растра
 
     class FakeOcr:
+        """Вместо распознавания берёт слова текстового слоя, попавшие в каждую вырезку холста."""
+
         name = "fake"
+        calls = 0
 
-        def recognize(self, pixmap: pymupdf.Pixmap) -> list[Word]:
-            k = pixmap.width / 842
-            return [Word(w.x0 * k, w.y0 * k, w.x1 * k, w.y1 * k, w.text) for w in text_words]
+        def recognize(self, image: Image.Image, regions: list[Region]) -> list[Word]:
+            self.calls += 1
+            words: list[Word] = []
+            for r in regions:
+                for w in text_words:
+                    x0, y0, x1, y1 = w.x0 * k, w.y0 * k, w.x1 * k, w.y1 * k
+                    if r.x0 <= (x0 + x1) / 2 < r.x1 and r.y0 <= (y0 + y1) / 2 < r.y1:
+                        words.append(Word(x0 - r.x0, y0 - r.y0 + r.canvas_y, x1 - r.x0, y1 - r.y0 + r.canvas_y, w.text))
+            return words
 
-    doc = parse_pdf(synthetic_scan_pdf, ocr=FakeOcr())
+    fake = FakeOcr()
+    doc = parse_pdf(synthetic_scan_pdf, ocr=fake)
+    assert fake.calls == 1  # один вызов OCR на страницу, а не по вызову на ячейку
     assert doc.pages[0].source == "ocr"
     assert doc.pages[0].kind == "spec"
     assert [i.pos for i in doc.items] == ["2.1", "2.10", "б/н"]
     assert doc.items[1].qty == 26
+    assert doc.items[0].group == "1.01 Групповая комната"
+
+
+def test_grid_cells_skip_blank_cells(synthetic_scan_pdf: Path) -> None:
+    page = pymupdf.open(synthetic_scan_pdf)[0]
+    pix = page.get_pixmap(dpi=OCR_DPI, colorspace=pymupdf.csGRAY)
+    image = Image.frombytes("L", (pix.width, pix.height), pix.samples)
+    cells = grid_cells(detect_rules(pix, 72 / OCR_DPI), image, page.rect.width, page.rect.height, 72 / OCR_DPI)
+    # 8 столбцов × 5 строк = 40 ячеек; с текстом — 8 в шапке и 18 в строках, плюс пара ячеек,
+    # куда заползает текст соседней (шапка «Завод изготовитель» шире своей графы).
+    assert 24 <= len(cells) <= 32
+
+
+@pytest.mark.skipif(not TesseractProvider.available(), reason="Tesseract не установлен")
+def test_scan_with_real_tesseract(synthetic_scan_pdf: Path) -> None:
+    doc = parse_pdf(synthetic_scan_pdf, ocr=TesseractProvider())
+    assert doc.pages[0].kind == "spec" and doc.pages[0].source == "ocr"
+    assert [i.pos for i in doc.items] == ["2.1", "2.10", "б/н"]
+    assert doc.items[1].qty == 26 and doc.items[1].unit == "шт."
 
 
 def test_detect_rules_on_raster(synthetic_scan_pdf: Path) -> None:
