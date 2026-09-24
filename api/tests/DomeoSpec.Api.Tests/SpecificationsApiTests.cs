@@ -71,18 +71,18 @@ public sealed class SpecificationsApiTests : IClassFixture<ApiFactory>
         var data = parsed!["data"]!;
         // Фронт прикладывает параметры КП к отредактированному документу.
         data["summary"]![0]!["price"] = 1500.5;
+        data["summary"]![0]!["installation"] = false;
         data["kp"] = new JsonObject
         {
-            ["number"] = "КП-17",
-            ["date"] = "2026-09-24",
-            ["supplier"] = new JsonObject { ["name"] = "ООО «Альянс»", ["position"] = "Директор", ["contacts"] = "" },
-            ["customer"] = new JsonObject { ["name"] = "", ["position"] = "Генеральный директор", ["contacts"] = "" },
+            ["contract_number"] = "12/2026",
+            ["contract_date"] = "2026-09-01",
+            ["supplier_position"] = "Директор",
+            ["customer_position"] = "Генеральный директор",
             ["vat_rate"] = 0.2,
             ["markup_percent"] = 10,
+            ["delivery_percent"] = 2,
             ["installation_percent"] = 5,
-            ["delivery_percent"] = 0,
             ["round_to_ruble"] = false,
-            ["terms"] = "",
         };
 
         var response = await _client.PostAsJsonAsync("/api/specifications/export", data);
@@ -95,12 +95,13 @@ public sealed class SpecificationsApiTests : IClassFixture<ApiFactory>
         var exported = _factory.Engine.LastExported!;
         Assert.Equal("2.10", exported.Summary[0].PosKey);
         Assert.Equal(1500.5, exported.Summary[0].Price);
+        Assert.False(exported.Summary[0].Installation);
         Assert.Equal(26, exported.Items[0].Qty);
         Assert.NotNull(exported.Kp);
-        Assert.Equal("КП-17", exported.Kp.Number);
+        Assert.Equal("12/2026", exported.Kp.ContractNumber);
         Assert.Equal(10, exported.Kp.MarkupPercent);
-        Assert.Equal("ООО «Альянс»", exported.Kp.Supplier.Name);
-        Assert.Equal("Директор", exported.Kp.Supplier.Position);
+        Assert.Equal(2, exported.Kp.DeliveryPercent);
+        Assert.Equal("Директор", exported.Kp.SupplierPosition);
     }
 
     [Fact]

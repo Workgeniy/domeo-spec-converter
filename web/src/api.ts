@@ -38,8 +38,10 @@ export interface SummaryItem {
   qty: number | null
   section: string
   note: string
-  /** Цена за единицу с НДС; null — не проставлена. */
+  /** Базовая цена за единицу с НДС; null — не проставлена. */
   price: number | null
+  /** Подлежит монтажу/пусконаладке → лист «1» (Приложение №1.1), иначе инвентарь → лист «2». */
+  installation: boolean
   source_doc: string
   groups: GroupQty[]
   item_ids: number[]
@@ -69,29 +71,20 @@ export interface SourceDocument {
   warnings: string[]
 }
 
-/** Сторона КП: поставщик или заказчик. В подписях печатается только должность. */
-export interface Party {
-  name: string
-  /** Должность подписанта. */
-  position: string
-  contacts: string
-}
-
-/** Параметры КП; правила цены — в web/src/kp.ts (зеркало core/app/export/kp.py). */
+/** Параметры КП — приложений к договору по образцу; правила цены — в web/src/kp.ts (зеркало core/app/export/kp.py). */
 export interface KpSettings {
-  number: string
-  date: string
-  valid_days: number
-  supplier: Party
-  customer: Party
   contract_number: string
   contract_date: string
+  /** Должность подписанта поставщика в блоке подписей. */
+  supplier_position: string
+  customer_position: string
   vat_rate: number
   markup_percent: number
-  installation_percent: number
+  /** Доставка — входит в цену товара. */
   delivery_percent: number
+  /** СМР от цены товара — только для позиций с монтажом (лист «1»). */
+  installation_percent: number
   round_to_ruble: boolean
-  terms: string
 }
 
 export interface ParsedDocument {

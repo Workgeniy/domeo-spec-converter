@@ -4,14 +4,16 @@ import type { SummaryRow, WorkspaceDocument } from './store'
 /** Строка свода без клиентских пометок — в том виде, в каком её понимает ядро. */
 function toSummaryItem(row: SummaryRow): SummaryItem {
   const { excluded: _excluded, ...item } = row
-  return item
+  // Строки, разобранные до появления признака монтажа, считаются оборудованием (лист «1»).
+  return { ...item, installation: item.installation ?? true }
 }
 
 /**
- * Документ для выгрузки: правки применены, исключённые строки убраны, параметры КП приложены.
- * Несколько томов одного объекта склеиваются в один документ — ядро соберёт из него общий Excel.
+ * Документ для выгрузки: правки применены, исключённые строки убраны. С параметрами КП ядро
+ * собирает приложения к договору (листы «1» и «2»), без них — рабочую выгрузку.
+ * Несколько томов одного объекта склеиваются в один документ.
  */
-export function buildExportRequest(title: string, documents: WorkspaceDocument[], kp: KpSettings): ParsedDocument {
+export function buildExportRequest(title: string, documents: WorkspaceDocument[], kp: KpSettings | null): ParsedDocument {
   const keep = (doc: WorkspaceDocument) => doc.doc.summary.filter((r) => !r.excluded).map(toSummaryItem)
 
   if (documents.length === 1) {

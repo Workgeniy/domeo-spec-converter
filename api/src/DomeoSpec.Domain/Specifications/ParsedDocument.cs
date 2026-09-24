@@ -23,34 +23,21 @@ public sealed record ParsedDocument
     public KpSettings? Kp { get; init; }
 }
 
-/// <summary>Сторона КП: поставщик или заказчик. В подписях печатается только должность.</summary>
-public sealed record Party
-{
-    public string Name { get; init; } = "";
-    /// <summary>Должность подписанта.</summary>
-    public string Position { get; init; } = "Генеральный директор";
-    public string Contacts { get; init; } = "";
-}
-
 /// <summary>
-/// Параметры коммерческого предложения. Правила цены применяются поверх базовой цены строки
-/// (<see cref="SummaryItem.Price"/>); сам расчёт живёт в ядре (core/app/export/kp.py).
+/// Параметры КП — приложений к договору по образцу заказчика. Правила цены применяются поверх
+/// базовой цены строки (<see cref="SummaryItem.Price"/>); сам расчёт живёт в ядре (core/app/export/kp.py).
 /// </summary>
 public sealed record KpSettings
 {
-    public string Number { get; init; } = "";
-    public string Date { get; init; } = "";
-    public int ValidDays { get; init; } = 30;
-    public Party Supplier { get; init; } = new();
-    public Party Customer { get; init; } = new();
     public string ContractNumber { get; init; } = "";
     public string ContractDate { get; init; } = "";
+    public string SupplierPosition { get; init; } = "Генеральный директор";
+    public string CustomerPosition { get; init; } = "Генеральный директор";
     public double VatRate { get; init; } = 0.2;
     public double MarkupPercent { get; init; }
-    public double InstallationPercent { get; init; }
     public double DeliveryPercent { get; init; }
+    public double InstallationPercent { get; init; }
     public bool RoundToRuble { get; init; }
-    public string Terms { get; init; } = "";
 }
 
 /// <summary>Сводка по одному исходному PDF.</summary>
@@ -111,8 +98,10 @@ public sealed record SummaryItem
     /// <summary>«Раздел» в КП.</summary>
     public string Section { get; init; } = "";
     public string Note { get; init; } = "";
-    /// <summary>Цена за единицу с НДС: от менеджера или этапа цен; null — не проставлена.</summary>
+    /// <summary>Базовая цена за единицу с НДС: от менеджера или этапа цен; null — не проставлена.</summary>
     public double? Price { get; init; }
+    /// <summary>Подлежит монтажу/пусконаладке → лист «1» (Приложение №1.1), иначе инвентарь → лист «2».</summary>
+    public bool Installation { get; init; } = true;
     public string SourceDoc { get; init; } = "";
     public IReadOnlyList<GroupQty> Groups { get; init; } = [];
     public IReadOnlyList<int> ItemIds { get; init; } = [];

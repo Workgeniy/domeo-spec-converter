@@ -47,7 +47,10 @@ class SummaryItem(BaseModel):
     qty: float | None = None
     section: str = ""  # «Раздел» в КП
     note: str = ""
-    price: float | None = None  # цена за единицу с НДС — проставляется менеджером или этапом цен
+    price: float | None = None  # базовая цена за единицу с НДС — от менеджера или этапа цен
+    # Подлежит монтажу/пусконаладке → лист «1» (Приложение №1.1, с графами СМР);
+    # иначе инвентарь → лист «2» (Приложение №1.2).
+    installation: bool = True
     source_doc: str = ""
     groups: list[GroupQty] = Field(default_factory=list)
     item_ids: list[int] = Field(default_factory=list)
@@ -113,32 +116,19 @@ class ParsedDocument(BaseModel):
         )
 
 
-class Party(BaseModel):
-    """Сторона КП: поставщик или заказчик. В блоке подписей печатается только должность,
-    организация и подпись вписываются руками на линиях."""
-
-    name: str = ""  # ООО «…» — в титуле КП
-    position: str = "Генеральный директор"  # должность подписанта
-    contacts: str = ""  # телефон, почта — свободный текст
-
-
 class KpSettings(BaseModel):
-    """Параметры коммерческого предложения. Правила цены применяются поверх базовой цены строки
-    (`SummaryItem.price` — закупочная или найденная, с НДС)."""
+    """Параметры КП — приложений к договору по образцу заказчика. Правила цены применяются
+    поверх базовой цены строки (`SummaryItem.price` — закупочная или найденная, с НДС)."""
 
-    number: str = ""
-    date: str = ""  # ДД.ММ.ГГГГ или ГГГГ-ММ-ДД
-    valid_days: int = 30  # срок действия предложения
-    supplier: Party = Field(default_factory=Party)
-    customer: Party = Field(default_factory=Party)
     contract_number: str = ""  # для шапки «Приложение №1.1 к Договору № … от …»
-    contract_date: str = ""
+    contract_date: str = ""  # ДД.ММ.ГГГГ или ГГГГ-ММ-ДД
+    supplier_position: str = "Генеральный директор"  # должность подписанта в блоке подписей
+    customer_position: str = "Генеральный директор"
     vat_rate: float = 0.2  # 0 — без НДС
-    markup_percent: float = 0.0  # наценка на базовую цену
-    installation_percent: float = 0.0  # СМР (монтаж/пусконаладка) от цены товара, графа K
-    delivery_percent: float = 0.0  # доставка от стоимости товара — отдельной строкой в итогах
+    markup_percent: float = 0.0  # наценка на базовую цену (графа-подсказка «пр» в образце)
+    delivery_percent: float = 0.0  # доставка — входит в цену товара (графа «дост»)
+    installation_percent: float = 0.0  # СМР от цены товара — только лист «1» (графа «монт»)
     round_to_ruble: bool = False  # цены в КП — до рубля, иначе до копейки
-    terms: str = ""  # условия: срок поставки, оплата, гарантия
 
 
 class ExportRequest(BaseModel):

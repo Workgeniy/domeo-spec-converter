@@ -8,10 +8,10 @@ import { useWorkspace, type RowKey, type SummaryRow } from '../store'
 import { formatMoney } from './format'
 import { SummaryRowView } from './SummaryRow'
 
-type Mode = 'all' | 'warnings' | 'noprice' | 'noted' | 'excluded'
+type Mode = 'all' | 'warnings' | 'noprice' | 'noted' | 'inventory' | 'excluded'
 
 // Ширины граф в пикселях; null — «Технические характеристики» забирают остаток.
-const SUMMARY_COLUMNS: (number | null)[] = [36, 46, 96, 170, 190, null, 60, 76, 60, 116, 110, 120, 44]
+const SUMMARY_COLUMNS: (number | null)[] = [36, 46, 96, 170, 190, null, 60, 76, 60, 64, 116, 110, 120, 44]
 const PAGE_SIZE = 50
 
 interface FlatRow {
@@ -51,6 +51,7 @@ export function SummaryTable() {
       if (mode === 'warnings' && row.warnings.length === 0) return false
       if (mode === 'noprice' && row.price !== null) return false
       if (mode === 'noted' && !row.note) return false
+      if (mode === 'inventory' && (row.installation ?? true)) return false
       if (!q) return true
       return (
         row.pos.toLowerCase().includes(q) ||
@@ -115,6 +116,7 @@ export function SummaryTable() {
               { value: 'warnings', label: 'С замечаниями' },
               { value: 'noprice', label: 'Без цены' },
               { value: 'noted', label: 'С примечанием' },
+              { value: 'inventory', label: 'Без монтажа (лист 2)' },
               { value: 'excluded', label: `Исключённые (${totals.excluded})` },
             ]}
           />
@@ -135,11 +137,17 @@ export function SummaryTable() {
           <Button size="xs" variant="light" leftSection={<IconArrowBackUp size={14} />} disabled={selectedKeys.length === 0} onClick={() => applyBulk({ excluded: false })}>
             Вернуть
           </Button>
+          <Button size="xs" variant="light" color="teal" disabled={selectedKeys.length === 0} onClick={() => applyBulk({ installation: true })}>
+            Монтаж: да (лист 1)
+          </Button>
+          <Button size="xs" variant="light" color="teal" disabled={selectedKeys.length === 0} onClick={() => applyBulk({ installation: false })}>
+            Монтаж: нет (лист 2)
+          </Button>
         </Group>
       </Paper>
 
       {/* Без ограничения высоты: прокручивается вся страница, а не таблица внутри страницы. */}
-      <Table.ScrollContainer minWidth={1640}>
+      <Table.ScrollContainer minWidth={1700}>
         <Table striped={false} highlightOnHover withTableBorder withColumnBorders fz="sm" layout="fixed" verticalSpacing={4}>
           {/* Ширины через colgroup: в фиксированной раскладке ширины на th браузер здесь не учитывает. */}
           <colgroup>
@@ -160,6 +168,7 @@ export function SummaryTable() {
               <Table.Th>Ед.</Table.Th>
               <Table.Th>Кол-во</Table.Th>
               <Table.Th>Помещ.</Table.Th>
+              <Table.Th>Монтаж</Table.Th>
               <Table.Th>Цена (база), с НДС</Table.Th>
               <Table.Th>Цена в КП, с НДС</Table.Th>
               <Table.Th>Сумма в КП</Table.Th>
@@ -183,7 +192,7 @@ export function SummaryTable() {
             ))}
             {visible.length === 0 && (
               <Table.Tr>
-                <Table.Td colSpan={13}>
+                <Table.Td colSpan={14}>
                   <Text size="sm" c="dimmed" ta="center" py="md">
                     Нет строк под этот фильтр
                   </Text>
@@ -193,7 +202,7 @@ export function SummaryTable() {
           </Table.Tbody>
           <Table.Tfoot>
             <Table.Tr>
-              <Table.Td colSpan={9}>
+              <Table.Td colSpan={10}>
                 <Text size="sm" fw={600}>
                   Позиций в КП: {totals.positions}
                   {totals.excluded > 0 && ` (исключено ${totals.excluded})`} · с ценой: {totals.priced}

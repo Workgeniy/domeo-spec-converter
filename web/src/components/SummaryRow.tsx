@@ -37,7 +37,8 @@ export const SummaryRowView = memo(function SummaryRowView({ number, row, rowKey
   const key = `${rowKey.docId}:${rowKey.index}`
   const excluded = row.excluded === true
   const hasWarnings = row.warnings.length > 0
-  const kpPrice = row.price === null ? null : priceRow(row.price, kp)
+  const installation = row.installation ?? true
+  const kpPrice = row.price === null ? null : priceRow(row.price, kp, installation)
   const total = kpPrice === null || row.qty === null ? null : kpPrice.unitTotal * row.qty
 
   return (
@@ -138,6 +139,18 @@ export const SummaryRowView = memo(function SummaryRowView({ number, row, rowKey
         </HoverCard>
       </Table.Td>
       <Table.Td>
+        <Tooltip label={installation ? 'Подлежит монтажу → лист «1» (Приложение №1.1)' : 'Инвентарь без монтажа → лист «2» (Приложение №1.2)'}>
+          <Checkbox
+            size="xs"
+            checked={installation}
+            onChange={(e) => onChange(rowKey, { installation: e.currentTarget.checked })}
+            disabled={excluded}
+            aria-label="подлежит монтажу"
+            styles={{ body: { justifyContent: 'center' } }}
+          />
+        </Tooltip>
+      </Table.Td>
+      <Table.Td>
         <NumberInput
           size="xs"
           variant="filled"
@@ -153,7 +166,7 @@ export const SummaryRowView = memo(function SummaryRowView({ number, row, rowKey
       </Table.Td>
       <Table.Td>
         <Tooltip
-          label={kpPrice ? `товар ${formatMoney(kpPrice.sale)} + СМР ${formatMoney(kpPrice.installation)}` : 'нет базовой цены'}
+          label={kpPrice ? `товар ${formatMoney(kpPrice.sale)}${installation ? ` + СМР ${formatMoney(kpPrice.installation)}` : ''}` : 'нет базовой цены'}
           disabled={!kpPrice}
         >
           <Text size="sm" ta="right" c={kpPrice === null ? 'dimmed' : undefined}>

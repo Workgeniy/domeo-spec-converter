@@ -36,10 +36,12 @@ export function WorkspaceView() {
     return { items, positions: active.length, excluded: rows.length - active.length, priced: totals.priced, total: totals.total, warnings }
   }, [documents, kp])
 
-  async function download(docs: WorkspaceDocument[]) {
+  // withKp: приложения к договору по образцу (листы «1» и «2»); иначе рабочая выгрузка
+  // (свод, по помещениям, проверка) — для себя, не для заказчика.
+  async function download(docs: WorkspaceDocument[], withKp = true) {
     setDownloading(true)
     try {
-      const { blob, fileName } = await exportExcel(buildExportRequest(title, docs, kp))
+      const { blob, fileName } = await exportExcel(buildExportRequest(title, docs, withKp ? kp : null))
       downloadBlob(blob, fileName)
     } catch (e) {
       notifications.show({ color: 'red', title: 'Не удалось сформировать Excel', message: e instanceof Error ? e.message : String(e) })
@@ -110,31 +112,30 @@ export function WorkspaceView() {
             <Button variant="default" color="red" leftSection={<IconTrash size={16} />} onClick={reset}>
               Закрыть объект
             </Button>
-            {documents.length === 1 ? (
-              <Button leftSection={<IconDownload size={16} />} loading={downloading} onClick={() => download(documents)}>
-                Сформировать КП (Excel)
-              </Button>
-            ) : (
-              <Menu shadow="md" width={340}>
-                <Menu.Target>
-                  <Button leftSection={<IconDownload size={16} />} rightSection={<IconChevronDown size={14} />} loading={downloading}>
-                    Сформировать КП (Excel)
-                  </Button>
-                </Menu.Target>
-                <Menu.Dropdown>
-                  <Menu.Item onClick={() => download(documents)} fw={600}>
-                    По объекту целиком (все тома)
-                  </Menu.Item>
-                  <Menu.Divider />
-                  <Menu.Label>Только один том</Menu.Label>
-                  {documents.map((d) => (
-                    <Menu.Item key={d.id} onClick={() => download([d])}>
-                      {d.doc.doc_code || d.doc.file_name}
-                    </Menu.Item>
-                  ))}
-                </Menu.Dropdown>
-              </Menu>
-            )}
+            <Menu shadow="md" width={360}>
+              <Menu.Target>
+                <Button leftSection={<IconDownload size={16} />} rightSection={<IconChevronDown size={14} />} loading={downloading}>
+                  Сформировать КП (Excel)
+                </Button>
+              </Menu.Target>
+              <Menu.Dropdown>
+                <Menu.Item onClick={() => download(documents)} fw={600}>
+                  {documents.length > 1 ? 'КП по объекту целиком (все тома)' : 'КП — приложения №1.1 и №1.2'}
+                </Menu.Item>
+                {documents.length > 1 && (
+                  <>
+                    <Menu.Label>КП только по одному тому</Menu.Label>
+                    {documents.map((d) => (
+                      <Menu.Item key={d.id} onClick={() => download([d])}>
+                        {d.doc.doc_code || d.doc.file_name}
+                      </Menu.Item>
+                    ))}
+                  </>
+                )}
+                <Menu.Divider />
+                <Menu.Item onClick={() => download(documents, false)}>Рабочая выгрузка (свод, по помещениям, проверка)</Menu.Item>
+              </Menu.Dropdown>
+            </Menu>
           </Group>
         </Group>
         <Collapse expanded={adding}>

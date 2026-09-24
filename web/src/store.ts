@@ -4,7 +4,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-import type { KpSettings, ParsedDocument, Party, SummaryItem } from './api'
+import type { KpSettings, ParsedDocument, SummaryItem } from './api'
 import { DEFAULT_KP } from './kp'
 
 /** Строка свода с клиентскими пометками, которых нет в модели ядра. */
@@ -36,7 +36,6 @@ interface WorkspaceState {
   updateRow: (key: RowKey, patch: Partial<SummaryRow>) => void
   updateRows: (keys: RowKey[], patch: Partial<SummaryRow>) => void
   setKp: (patch: Partial<KpSettings>) => void
-  setKpParty: (side: 'supplier' | 'customer', patch: Partial<Party>) => void
   clear: () => void
 }
 
@@ -79,30 +78,35 @@ export const useWorkspace = create<WorkspaceState>()(
       updateRow: (key, patch) => set((s) => ({ documents: patchRows(s.documents, [key], patch) })),
       updateRows: (keys, patch) => set((s) => ({ documents: patchRows(s.documents, keys, patch) })),
       setKp: (patch) => set((s) => ({ kp: { ...s.kp, ...patch } })),
-      setKpParty: (side, patch) => set((s) => ({ kp: { ...s.kp, [side]: { ...s.kp[side], ...patch } } })),
-      // Реквизиты поставщика и правила расчёта — свои у компании, они переживают смену объекта;
-      // сбрасываются только данные конкретного объекта.
-      clear: () =>
-        set((s) => ({
-          title: '',
-          documents: [],
-          kp: { ...s.kp, number: '', customer: DEFAULT_KP.customer, contract_number: '', contract_date: '' },
-        })),
+      // Правила расчёта и должности — свои у компании, они переживают смену объекта;
+      // сбрасываются только данные конкретного объекта (договор).
+      clear: () => set((s) => ({ title: '', documents: [], kp: { ...s.kp, contract_number: '', contract_date: '' } })),
     }),
     {
       name: 'domeo-spec-workspace',
-      version: 3,
+      version: 4,
       migrate: (persisted, version) => {
         const state = persisted as Partial<WorkspaceState>
-        if (version < 2) return { ...state, kp: DEFAULT_KP }
-        if (version < 3 && state.kp) {
-          // v2 хранил подписанта одной строкой (director); теперь только должность.
-          const upgrade = (p: Partial<Party> & { director?: string }): Party => ({
-            name: p.name ?? '',
-            position: p.position || p.director || 'Генеральный директор',
-            contacts: p.contacts ?? '',
-          })
-          return { ...state, kp: { ...state.kp, supplier: upgrade(state.kp.supplier), customer: upgrade(state.kp.customer) } }
+        if (version < 4) {
+          // До v4 параметры КП описывали титульный лист (номер, дата, стороны, условия), которого
+          // больше нет; переносим только то, что осталось в форме приложений к договору.
+          const old = (state.kp ?? {}) as Partial<KpSettings> & {
+            supplier?: { position?: string }
+            customer?: { position?: string }
+          }
+          const kp: KpSettings = {
+            ...DEFAULT_KP,
+            contract_number: old.contract_number ?? '',
+            contract_date: old.contract_date ?? '',
+            supplier_position: old.supplier_position || old.supplier?.position || DEFAULT_KP.supplier_position,
+            customer_position: old.customer_position || old.customer?.position || DEFAULT_KP.customer_position,
+            vat_rate: old.vat_rate ?? DEFAULT_KP.vat_rate,
+            markup_percent: old.markup_percent ?? 0,
+            delivery_percent: old.delivery_percent ?? 0,
+            installation_percent: old.installation_percent ?? 0,
+            round_to_ruble: old.round_to_ruble ?? false,
+          }
+          return { ...state, kp }
         }
         return state
       },
