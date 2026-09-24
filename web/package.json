@@ -1,0 +1,32 @@
+{
+  "name": "domeo-spec-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@mantine/core": "^9.6.2",
+    "@mantine/dropzone": "^9.6.2",
+    "@mantine/hooks": "^9.6.2",
+    "@mantine/notifications": "^9.6.2",
+    "@tabler/icons-react": "^3.48.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^4.4.1",
+    "postcss": "^8.5.28",
+    "postcss-preset-mantine": "^1.18.0",
+    "postcss-simple-vars": "^7.0.1",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5"
+  }
+}

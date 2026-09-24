@@ -1,0 +1,28 @@
+# ---- Python ----
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+server/.data/
+
+# ---- Node / Vite ----
+node_modules/
+web/dist/
+web/.vite/
+*.local
+
+# ---- Env / secrets ----
+.env
+*.env
+!.env.example
+
+# ---- Исходные PDF заказчика (не хранить в git) ----
+server/tests/samples/*
+!server/tests/samples/.gitkeep
+
+# ---- OS / IDE ----
+.DS_Store
+Thumbs.db
+.idea/
+.vs/
+*.log
