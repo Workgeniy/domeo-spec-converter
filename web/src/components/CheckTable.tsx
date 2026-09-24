@@ -2,6 +2,7 @@ import { Alert, Badge, Group, Paper, SimpleGrid, Stack, Table, Text } from '@man
 import { IconCircleCheck } from '@tabler/icons-react'
 
 import { useWorkspace } from '../store'
+import { TableScroller } from './TableScroller'
 
 interface Row {
   where: string
@@ -85,7 +86,7 @@ export function CheckTable() {
           Замечаний нет: все строки прочитаны с позицией, единицей и количеством.
         </Alert>
       ) : (
-        <Table.ScrollContainer minWidth={700}>
+        <TableScroller minWidth={700}>
           <Table striped withTableBorder withColumnBorders fz="sm">
             <Table.Thead>
               <Table.Tr>
@@ -104,7 +105,7 @@ export function CheckTable() {
               ))}
             </Table.Tbody>
           </Table>
-        </Table.ScrollContainer>
+        </TableScroller>
       )}
     </Stack>
   )

@@ -3,3 +3,12 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background: var(--mantine-color-gray-0);
 }
+
+/* Контейнер широкой таблицы: своя полоса прокрутки скрыта, вместо неё sticky-полоса внизу экрана
+   (см. components/TableScroller.tsx). */
+.hscroll-hidden {
+  scrollbar-width: none;
+}
+.hscroll-hidden::-webkit-scrollbar {
+  display: none;
+}

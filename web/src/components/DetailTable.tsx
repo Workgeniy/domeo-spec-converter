@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { useWorkspace } from '../store'
 import { formatQty } from './format'
+import { TableScroller } from './TableScroller'
 
 const PAGE_SIZE = 50
 
@@ -50,7 +51,7 @@ export function DetailTable() {
         </Text>
       </Group>
       {/* Без ограничения высоты: прокручивается вся страница, а не таблица внутри страницы. */}
-      <Table.ScrollContainer minWidth={1300}>
+      <TableScroller minWidth={1300}>
         <Table striped highlightOnHover withTableBorder withColumnBorders fz="sm" layout="fixed">
           <colgroup>
             {[...(docOptions.length > 1 ? [130] : []), 56, 220, 80, null, 160, 140, 64, 70, 180].map((w, i) => (
@@ -105,7 +106,7 @@ export function DetailTable() {
             ))}
           </Table.Tbody>
         </Table>
-      </Table.ScrollContainer>
+      </TableScroller>
       {pages > 1 && (
         <Group justify="center" mt="sm">
           <Pagination total={pages} value={page} onChange={setPage} size="sm" />

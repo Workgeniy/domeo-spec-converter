@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { SECTIONS } from '../sections'
 import { kpTotals } from '../kp'
 import { useWorkspace, type RowKey, type SummaryRow } from '../store'
+import { TableScroller } from './TableScroller'
 import { formatMoney } from './format'
 import { SummaryRowView } from './SummaryRow'
 
@@ -147,7 +148,7 @@ export function SummaryTable() {
       </Paper>
 
       {/* Без ограничения высоты: прокручивается вся страница, а не таблица внутри страницы. */}
-      <Table.ScrollContainer minWidth={1700}>
+      <TableScroller minWidth={1700}>
         <Table striped={false} highlightOnHover withTableBorder withColumnBorders fz="sm" layout="fixed" verticalSpacing={4}>
           {/* Ширины через colgroup: в фиксированной раскладке ширины на th браузер здесь не учитывает. */}
           <colgroup>
@@ -222,7 +223,7 @@ export function SummaryTable() {
             </Table.Tr>
           </Table.Tfoot>
         </Table>
-      </Table.ScrollContainer>
+      </TableScroller>
       <Group justify="space-between" mt={6}>
         <Text size="xs" c="dimmed">
           Жёлтые строки — с замечаниями разбора; наведите на число в графе «Помещ.», чтобы увидеть раскладку по помещениям.
