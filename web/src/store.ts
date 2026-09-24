@@ -96,11 +96,10 @@ export const useWorkspace = create<WorkspaceState>()(
         const state = persisted as Partial<WorkspaceState>
         if (version < 2) return { ...state, kp: DEFAULT_KP }
         if (version < 3 && state.kp) {
-          // v2 хранил подписанта одной строкой (director); теперь должность и подпись раздельно.
+          // v2 хранил подписанта одной строкой (director); теперь только должность.
           const upgrade = (p: Partial<Party> & { director?: string }): Party => ({
             name: p.name ?? '',
             position: p.position || p.director || 'Генеральный директор',
-            signatory: p.signatory ?? '',
             contacts: p.contacts ?? '',
           })
           return { ...state, kp: { ...state.kp, supplier: upgrade(state.kp.supplier), customer: upgrade(state.kp.customer) } }

@@ -40,16 +40,13 @@ export function KpPanel({ onDownload, downloading }: Props) {
       <Fieldset legend={title}>
         <Stack gap="xs">
           <TextInput label="Организация" placeholder="ООО «…»" value={value.name} onChange={(e) => setKpParty(side, { name: e.currentTarget.value })} />
-          <Group grow>
-            <TextInput label="Должность" placeholder="Генеральный директор" value={value.position} onChange={(e) => setKpParty(side, { position: e.currentTarget.value })} />
-            <TextInput
-              label="Подпись"
-              description="инициалы и фамилия"
-              placeholder="И.И. Иванов"
-              value={value.signatory}
-              onChange={(e) => setKpParty(side, { signatory: e.currentTarget.value })}
-            />
-          </Group>
+          <TextInput
+            label="Должность подписанта"
+            description="в подписях печатается только должность, организация и подпись — на линиях"
+            placeholder="Генеральный директор"
+            value={value.position}
+            onChange={(e) => setKpParty(side, { position: e.currentTarget.value })}
+          />
           <TextInput label="Контакты" placeholder="телефон, почта" value={value.contacts} onChange={(e) => setKpParty(side, { contacts: e.currentTarget.value })} />
         </Stack>
       </Fieldset>

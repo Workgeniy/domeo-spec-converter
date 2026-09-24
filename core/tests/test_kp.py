@@ -57,8 +57,8 @@ def test_workbook_with_kp_sheet() -> None:
             SummaryItem(pos="2.9", section="Мебель", name="Стул", description="Стул", unit="шт.", qty=5, price=None),
         ],
         kp=settings(
-            supplier=Party(name="ООО «Альянс»", signatory="А.В. Очаковский"),
-            customer=Party(name="ООО «ПИК-Менеджмент»", signatory="Г.Д. Ходосок"),
+            supplier=Party(name="ООО «Альянс»"),
+            customer=Party(name="ООО «ПИК-Менеджмент»", position="Директор"),
             contract_number="12/2026",
             contract_date="2026-09-01",
             delivery_percent=2,
@@ -74,13 +74,14 @@ def test_workbook_with_kp_sheet() -> None:
     assert spec["M6"].value is None  # без базовой цены графы КП пустые
     assert spec.auto_filter.ref == "A3:O6"
     assert spec.row_dimensions[4].outline_level == 1
-    # Блок подписей как в образце: «Итого» в строке 7, «Подписи Сторон» через строку,
-    # затем стороны, жирные должность и организация, линия подписи с инициалами.
+    # Блок подписей по образцу: «Итого» в строке 7, «Подписи Сторон» через строку, затем стороны,
+    # жирная должность, дальше только линии — организацию и подпись вписывают руками.
     assert spec["M7"].value == "Итого с НДС" and spec["A9"].value == "Подписи Сторон"
     assert (spec["B12"].value, spec["F12"].value) == ("Заказчик:", "Поставщик:")
-    assert spec["B13"].value == "Генеральный директор" and spec["B13"].font.bold
-    assert (spec["B14"].value, spec["F14"].value) == ("ООО «ПИК-Менеджмент»", "ООО «Альянс»") and spec["F14"].font.bold
-    assert (spec["B16"].value, spec["F16"].value) == ("_______________________/Г.Д. Ходосок", "_______________________/А.В. Очаковский")
+    assert (spec["B13"].value, spec["F13"].value) == ("Директор", "Генеральный директор") and spec["B13"].font.bold
+    assert (spec["B14"].value, spec["F14"].value) == ("_______________________", "_______________________")
+    assert (spec["B16"].value, spec["F16"].value) == ("_______________________/", "_______________________/")
+    assert "ООО «Альянс»" not in [c.value for row in spec.iter_rows(min_row=9) for c in row]
 
     kp = wb["КП"]
     assert kp["A1"].value == "КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ № 17 от 24.09.2026"

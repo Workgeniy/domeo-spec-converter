@@ -23,14 +23,12 @@ public sealed record ParsedDocument
     public KpSettings? Kp { get; init; }
 }
 
-/// <summary>Сторона КП: поставщик или заказчик — как в блоке подписей образца.</summary>
+/// <summary>Сторона КП: поставщик или заказчик. В подписях печатается только должность.</summary>
 public sealed record Party
 {
     public string Name { get; init; } = "";
     /// <summary>Должность подписанта.</summary>
     public string Position { get; init; } = "Генеральный директор";
-    /// <summary>Инициалы и фамилия для строки подписи: «Г.Д. Ходосок».</summary>
-    public string Signatory { get; init; } = "";
     public string Contacts { get; init; } = "";
 }
 

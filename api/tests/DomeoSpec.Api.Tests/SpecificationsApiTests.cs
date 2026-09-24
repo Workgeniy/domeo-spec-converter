@@ -75,8 +75,8 @@ public sealed class SpecificationsApiTests : IClassFixture<ApiFactory>
         {
             ["number"] = "КП-17",
             ["date"] = "2026-09-24",
-            ["supplier"] = new JsonObject { ["name"] = "ООО «Альянс»", ["position"] = "Генеральный директор", ["signatory"] = "А.В. Очаковский", ["contacts"] = "" },
-            ["customer"] = new JsonObject { ["name"] = "", ["position"] = "Генеральный директор", ["signatory"] = "", ["contacts"] = "" },
+            ["supplier"] = new JsonObject { ["name"] = "ООО «Альянс»", ["position"] = "Директор", ["contacts"] = "" },
+            ["customer"] = new JsonObject { ["name"] = "", ["position"] = "Генеральный директор", ["contacts"] = "" },
             ["vat_rate"] = 0.2,
             ["markup_percent"] = 10,
             ["installation_percent"] = 5,
@@ -100,7 +100,7 @@ public sealed class SpecificationsApiTests : IClassFixture<ApiFactory>
         Assert.Equal("КП-17", exported.Kp.Number);
         Assert.Equal(10, exported.Kp.MarkupPercent);
         Assert.Equal("ООО «Альянс»", exported.Kp.Supplier.Name);
-        Assert.Equal("А.В. Очаковский", exported.Kp.Supplier.Signatory);
+        Assert.Equal("Директор", exported.Kp.Supplier.Position);
     }
 
     [Fact]

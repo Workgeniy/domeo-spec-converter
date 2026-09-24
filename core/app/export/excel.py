@@ -192,17 +192,20 @@ def _supplier_note(item: SummaryItem) -> str:
     return "; ".join(parts)
 
 
+SIGN_LINE = "_______________________"
+
+
 def _write_signatures(ws: Worksheet, start: int, kp: KpSettings | None) -> None:
-    """Блок подписей как в образце: «Подписи Сторон», через две строки «Заказчик:»/«Поставщик:»,
-    ниже жирным должность и организация, через строку — линия подписи с инициалами."""
+    """Блок подписей по образцу: «Подписи Сторон», через две строки «Заказчик:»/«Поставщик:»,
+    ниже жирным должность, дальше только линии — организацию и подпись вписывают руками."""
     customer = kp.customer if kp else Party()
     supplier = kp.supplier if kp else Party()
     ws.cell(start, 1, "Подписи Сторон").font = Font(name=FONT, size=10, bold=True)
     lines = [
         (3, False, "Заказчик:", "Поставщик:"),
         (4, True, customer.position or "Генеральный директор", supplier.position or "Генеральный директор"),
-        (5, True, customer.name, supplier.name),
-        (7, False, f"_______________________/{customer.signatory}", f"_______________________/{supplier.signatory}"),
+        (5, False, SIGN_LINE, SIGN_LINE),
+        (7, False, SIGN_LINE + "/", SIGN_LINE + "/"),
     ]
     for offset, is_bold, left, right in lines:
         r = start + offset
@@ -327,8 +330,8 @@ def _fill_kp_sheet(ws: Worksheet, data: ExportRequest, kp: KpSettings) -> None:
 
     ws.cell(r, 1, "Поставщик:").font = normal
     ws.cell(r + 1, 1, kp.supplier.position or "Генеральный директор").font = bold
-    ws.cell(r + 2, 1, kp.supplier.name).font = bold
-    ws.cell(r + 4, 1, f"_______________________/{kp.supplier.signatory}").font = normal
+    ws.cell(r + 2, 1, SIGN_LINE).font = normal
+    ws.cell(r + 4, 1, SIGN_LINE + "/").font = normal
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
@@ -336,8 +339,7 @@ def _fill_kp_sheet(ws: Worksheet, data: ExportRequest, kp: KpSettings) -> None:
 
 
 def _party_line(party: Party) -> str:
-    signer = " ".join(p for p in (party.position, party.signatory) if p) if party.signatory else ""
-    return ", ".join(p for p in (party.name, signer, party.contacts) if p) or "—"
+    return ", ".join(p for p in (party.name, party.contacts) if p) or "—"
 
 
 def _write_kp_row(ws: Worksheet, r: int, values: list[object], font: Font) -> None:
