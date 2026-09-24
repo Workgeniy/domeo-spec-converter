@@ -57,8 +57,8 @@ def test_workbook_with_kp_sheet() -> None:
             SummaryItem(pos="2.9", section="Мебель", name="Стул", description="Стул", unit="шт.", qty=5, price=None),
         ],
         kp=settings(
-            supplier=Party(name="ООО «Альянс»", director="Генеральный директор Очаковский А.В."),
-            customer=Party(name="ООО «ПИК-Менеджмент»"),
+            supplier=Party(name="ООО «Альянс»", signatory="А.В. Очаковский"),
+            customer=Party(name="ООО «ПИК-Менеджмент»", signatory="Г.Д. Ходосок"),
             contract_number="12/2026",
             contract_date="2026-09-01",
             delivery_percent=2,
@@ -72,8 +72,15 @@ def test_workbook_with_kp_sheet() -> None:
     assert spec["B1"].value == "Приложение №1.1 к Договору № 12/2026 от 01.09.2026"
     assert spec["K4"].value == 55.0 and spec["L4"].value == 0.2 and spec["M4"].value == 1155.0
     assert spec["M6"].value is None  # без базовой цены графы КП пустые
-    signature_cells = [c.value for row in spec.iter_rows(min_row=spec.max_row - 8, max_row=spec.max_row) for c in row if c.value]
-    assert "ООО «Альянс»" in signature_cells and "ООО «ПИК-Менеджмент»" in signature_cells
+    assert spec.auto_filter.ref == "A3:O6"
+    assert spec.row_dimensions[4].outline_level == 1
+    # Блок подписей как в образце: «Итого» в строке 7, «Подписи Сторон» через строку,
+    # затем стороны, жирные должность и организация, линия подписи с инициалами.
+    assert spec["M7"].value == "Итого с НДС" and spec["A9"].value == "Подписи Сторон"
+    assert (spec["B12"].value, spec["F12"].value) == ("Заказчик:", "Поставщик:")
+    assert spec["B13"].value == "Генеральный директор" and spec["B13"].font.bold
+    assert (spec["B14"].value, spec["F14"].value) == ("ООО «ПИК-Менеджмент»", "ООО «Альянс»") and spec["F14"].font.bold
+    assert (spec["B16"].value, spec["F16"].value) == ("_______________________/Г.Д. Ходосок", "_______________________/А.В. Очаковский")
 
     kp = wb["КП"]
     assert kp["A1"].value == "КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ № 17 от 24.09.2026"

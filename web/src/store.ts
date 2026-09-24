@@ -91,10 +91,21 @@ export const useWorkspace = create<WorkspaceState>()(
     }),
     {
       name: 'domeo-spec-workspace',
-      version: 2,
+      version: 3,
       migrate: (persisted, version) => {
         const state = persisted as Partial<WorkspaceState>
-        return version < 2 ? { ...state, kp: DEFAULT_KP } : state
+        if (version < 2) return { ...state, kp: DEFAULT_KP }
+        if (version < 3 && state.kp) {
+          // v2 хранил подписанта одной строкой (director); теперь должность и подпись раздельно.
+          const upgrade = (p: Partial<Party> & { director?: string }): Party => ({
+            name: p.name ?? '',
+            position: p.position ?? p.director ?? 'Генеральный директор',
+            signatory: p.signatory ?? '',
+            contacts: p.contacts ?? '',
+          })
+          return { ...state, kp: { ...state.kp, supplier: upgrade(state.kp.supplier), customer: upgrade(state.kp.customer) } }
+        }
+        return state
       },
       // localStorage может быть недоступен (приватный режим) — тогда работаем без сохранения.
       storage: {

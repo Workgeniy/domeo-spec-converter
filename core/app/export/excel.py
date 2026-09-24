@@ -122,9 +122,13 @@ def _fill_spec_sheet(ws: Worksheet, data: ExportRequest) -> None:
         sum_cell.number_format = MONEY
         for col in (13, 14):
             ws.cell(row, col).border = BORDER
+        # Как в образце: автофильтр на шапке и группировка строк таблицы (кнопки «1 2» слева),
+        # чтобы одним щелчком свернуть позиции и видеть только итог и подписи.
+        ws.auto_filter.ref = f"A3:{get_column_letter(last_col)}{last}"
+        ws.row_dimensions.group(first, last, outline_level=1)
         row += 1
 
-    _write_signatures(ws, row + 2, kp)
+    _write_signatures(ws, row + 1, kp)
     ws.freeze_panes = "A4"
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToWidth = 1
@@ -168,7 +172,7 @@ def _write_spec_row(ws: Worksheet, r: int, number: int, item: SummaryItem, kp: K
             vertical="center",
             wrap_text=True,
         )
-        if idx in (8, 9, 10, 11, 13, 14):
+        if idx in (6, 8, 9, 10, 11, 13, 14):  # количество в образце тоже «0,00»
             cell.number_format = MONEY
         elif idx == 12:
             cell.number_format = PERCENT
@@ -189,20 +193,23 @@ def _supplier_note(item: SummaryItem) -> str:
 
 
 def _write_signatures(ws: Worksheet, start: int, kp: KpSettings | None) -> None:
+    """Блок подписей как в образце: «Подписи Сторон», через две строки «Заказчик:»/«Поставщик:»,
+    ниже жирным должность и организация, через строку — линия подписи с инициалами."""
     customer = kp.customer if kp else Party()
     supplier = kp.supplier if kp else Party()
     ws.cell(start, 1, "Подписи Сторон").font = Font(name=FONT, size=10, bold=True)
     lines = [
-        ("Заказчик:", "Поставщик:"),
-        (customer.director or "Генеральный директор", supplier.director or "Генеральный директор"),
-        (customer.name, supplier.name),
-        ("_______________________/", "_______________________/"),
+        (3, False, "Заказчик:", "Поставщик:"),
+        (4, True, customer.position or "Генеральный директор", supplier.position or "Генеральный директор"),
+        (5, True, customer.name, supplier.name),
+        (7, False, f"_______________________/{customer.signatory}", f"_______________________/{supplier.signatory}"),
     ]
-    for offset, (left, right) in enumerate(lines, start=3):
+    for offset, is_bold, left, right in lines:
         r = start + offset
-        ws.cell(r, 2, left).font = Font(name=FONT, size=10)
+        ws.cell(r, 2, left).font = Font(name=FONT, size=10, bold=is_bold)
         ws.merge_cells(start_row=r, start_column=6, end_row=r, end_column=12)
-        ws.cell(r, 6, right).font = Font(name=FONT, size=10)
+        ws.cell(r, 6, right).font = Font(name=FONT, size=10, bold=is_bold)
+        ws.row_dimensions[r].height = 33
 
 
 # ---------- лист «КП» ----------
@@ -318,9 +325,10 @@ def _fill_kp_sheet(ws: Worksheet, data: ExportRequest, kp: KpSettings) -> None:
         cell.font = Font(name=FONT, size=10, bold=True, color="C00000")
         r += 2
 
-    ws.cell(r, 1, "Поставщик:").font = bold
-    ws.cell(r, 2, f"{kp.supplier.director or 'Генеральный директор'} {kp.supplier.name}".strip()).font = normal
-    ws.cell(r + 1, 2, "_______________________/").font = normal
+    ws.cell(r, 1, "Поставщик:").font = normal
+    ws.cell(r + 1, 1, kp.supplier.position or "Генеральный директор").font = bold
+    ws.cell(r + 2, 1, kp.supplier.name).font = bold
+    ws.cell(r + 4, 1, f"_______________________/{kp.supplier.signatory}").font = normal
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
@@ -328,7 +336,8 @@ def _fill_kp_sheet(ws: Worksheet, data: ExportRequest, kp: KpSettings) -> None:
 
 
 def _party_line(party: Party) -> str:
-    return ", ".join(p for p in (party.name, party.director, party.contacts) if p) or "—"
+    signer = " ".join(p for p in (party.position, party.signatory) if p) if party.signatory else ""
+    return ", ".join(p for p in (party.name, signer, party.contacts) if p) or "—"
 
 
 def _write_kp_row(ws: Worksheet, r: int, values: list[object], font: Font) -> None:

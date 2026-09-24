@@ -69,11 +69,13 @@ export interface SourceDocument {
   warnings: string[]
 }
 
-/** Сторона КП: поставщик или заказчик. */
+/** Сторона КП: поставщик или заказчик — как в блоке подписей образца. */
 export interface Party {
   name: string
-  /** Подписант: должность и ФИО. */
-  director: string
+  /** Должность подписанта. */
+  position: string
+  /** Инициалы и фамилия для строки подписи: «Г.Д. Ходосок». */
+  signatory: string
   contacts: string
 }
 
