@@ -113,6 +113,33 @@ class ParsedDocument(BaseModel):
         )
 
 
+class Party(BaseModel):
+    """Сторона КП: поставщик или заказчик."""
+
+    name: str = ""  # ООО «…»
+    director: str = ""  # подписант: должность и ФИО, например «Генеральный директор Иванов И.И.»
+    contacts: str = ""  # телефон, почта — свободный текст
+
+
+class KpSettings(BaseModel):
+    """Параметры коммерческого предложения. Правила цены применяются поверх базовой цены строки
+    (`SummaryItem.price` — закупочная или найденная, с НДС)."""
+
+    number: str = ""
+    date: str = ""  # ДД.ММ.ГГГГ или ГГГГ-ММ-ДД
+    valid_days: int = 30  # срок действия предложения
+    supplier: Party = Field(default_factory=Party)
+    customer: Party = Field(default_factory=Party)
+    contract_number: str = ""  # для шапки «Приложение №1.1 к Договору № … от …»
+    contract_date: str = ""
+    vat_rate: float = 0.2  # 0 — без НДС
+    markup_percent: float = 0.0  # наценка на базовую цену
+    installation_percent: float = 0.0  # СМР (монтаж/пусконаладка) от цены товара, графа K
+    delivery_percent: float = 0.0  # доставка от стоимости товара — отдельной строкой в итогах
+    round_to_ruble: bool = False  # цены в КП — до рубля, иначе до копейки
+    terms: str = ""  # условия: срок поставки, оплата, гарантия
+
+
 class ExportRequest(BaseModel):
     """Данные для формирования Excel. Фронт может прислать отредактированные строки,
     в том числе объединённые из нескольких томов одного объекта."""
@@ -125,3 +152,4 @@ class ExportRequest(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     pages: list[PageInfo] = Field(default_factory=list)
     documents: list[SourceDocument] = Field(default_factory=list)
+    kp: KpSettings | None = None  # без параметров — просто спецификация без листа «КП»

@@ -19,6 +19,38 @@ public sealed record ParsedDocument
     public IReadOnlyList<string> Warnings { get; init; } = [];
     /// <summary>Исходные PDF: один после разбора, несколько — когда фронт объединил тома одного объекта.</summary>
     public IReadOnlyList<SourceDocument> Documents { get; init; } = [];
+    /// <summary>Параметры КП для выгрузки; null — просто спецификация без листа «КП».</summary>
+    public KpSettings? Kp { get; init; }
+}
+
+/// <summary>Сторона КП: поставщик или заказчик.</summary>
+public sealed record Party
+{
+    public string Name { get; init; } = "";
+    /// <summary>Подписант: должность и ФИО.</summary>
+    public string Director { get; init; } = "";
+    public string Contacts { get; init; } = "";
+}
+
+/// <summary>
+/// Параметры коммерческого предложения. Правила цены применяются поверх базовой цены строки
+/// (<see cref="SummaryItem.Price"/>); сам расчёт живёт в ядре (core/app/export/kp.py).
+/// </summary>
+public sealed record KpSettings
+{
+    public string Number { get; init; } = "";
+    public string Date { get; init; } = "";
+    public int ValidDays { get; init; } = 30;
+    public Party Supplier { get; init; } = new();
+    public Party Customer { get; init; } = new();
+    public string ContractNumber { get; init; } = "";
+    public string ContractDate { get; init; } = "";
+    public double VatRate { get; init; } = 0.2;
+    public double MarkupPercent { get; init; }
+    public double InstallationPercent { get; init; }
+    public double DeliveryPercent { get; init; }
+    public bool RoundToRuble { get; init; }
+    public string Terms { get; init; } = "";
 }
 
 /// <summary>Сводка по одному исходному PDF.</summary>

@@ -68,16 +68,38 @@ public sealed class SpecificationsApiTests : IClassFixture<ApiFactory>
     {
         using var form = PdfForm("том.pdf");
         var parsed = await (await _client.PostAsync("/api/specifications/parse", form)).Content.ReadFromJsonAsync<JsonNode>();
+        var data = parsed!["data"]!;
+        // Фронт прикладывает параметры КП к отредактированному документу.
+        data["summary"]![0]!["price"] = 1500.5;
+        data["kp"] = new JsonObject
+        {
+            ["number"] = "КП-17",
+            ["date"] = "2026-09-24",
+            ["supplier"] = new JsonObject { ["name"] = "ООО «Альянс»", ["director"] = "", ["contacts"] = "" },
+            ["customer"] = new JsonObject { ["name"] = "", ["director"] = "", ["contacts"] = "" },
+            ["vat_rate"] = 0.2,
+            ["markup_percent"] = 10,
+            ["installation_percent"] = 5,
+            ["delivery_percent"] = 0,
+            ["round_to_ruble"] = false,
+            ["terms"] = "",
+        };
 
-        var response = await _client.PostAsJsonAsync("/api/specifications/export", parsed!["data"]);
+        var response = await _client.PostAsJsonAsync("/api/specifications/export", data);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", response.Content.Headers.ContentType!.MediaType);
         Assert.Contains("xlsx", response.Content.Headers.ContentDisposition!.ToString());
         Assert.Equal([1, 2, 3], await response.Content.ReadAsByteArrayAsync());
         // Документ дошёл до ядра в том же виде: snake_case JSON фронта → доменная модель.
-        Assert.Equal("2.10", _factory.Engine.LastExported!.Summary[0].PosKey);
-        Assert.Equal(26, _factory.Engine.LastExported.Items[0].Qty);
+        var exported = _factory.Engine.LastExported!;
+        Assert.Equal("2.10", exported.Summary[0].PosKey);
+        Assert.Equal(1500.5, exported.Summary[0].Price);
+        Assert.Equal(26, exported.Items[0].Qty);
+        Assert.NotNull(exported.Kp);
+        Assert.Equal("КП-17", exported.Kp.Number);
+        Assert.Equal(10, exported.Kp.MarkupPercent);
+        Assert.Equal("ООО «Альянс»", exported.Kp.Supplier.Name);
     }
 
     [Fact]

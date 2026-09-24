@@ -15,7 +15,8 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from ..models import ExportRequest, SourceDocument, SpecItem, SummaryItem
+from ..models import ExportRequest, KpSettings, Party, SourceDocument, SpecItem, SummaryItem
+from .kp import format_date, price_row, valid_until
 
 FONT = "Times New Roman"
 THIN = Side(style="thin")
@@ -65,6 +66,9 @@ DETAIL_COLUMNS = [
 def build_workbook(data: ExportRequest) -> Workbook:
     wb = Workbook()
     _fill_spec_sheet(wb.active, data)
+    if data.kp is not None:
+        # Лист «КП» — первым: это титул предложения, спецификация — его приложение.
+        _fill_kp_sheet(wb.create_sheet("КП", 0), data, data.kp)
     _fill_detail_sheet(wb.create_sheet("По помещениям"), data.items)
     _fill_check_sheet(wb.create_sheet("Проверка"), data)
     return wb
@@ -79,9 +83,12 @@ def _fill_spec_sheet(ws: Worksheet, data: ExportRequest) -> None:
     for idx, (_, width) in enumerate(SPEC_COLUMNS, start=1):
         ws.column_dimensions[get_column_letter(idx)].width = width
 
+    kp = data.kp
+    contract_no = (kp.contract_number if kp else "") or "___________"
+    contract_date = format_date(kp.contract_date if kp else "", fallback="_____________г.")
     ws.merge_cells(start_row=1, start_column=2, end_row=1, end_column=last_col)
     ws.merge_cells(start_row=2, start_column=2, end_row=2, end_column=last_col)
-    ws.cell(1, 2, "Приложение №1.1 к Договору ___________ от _____________г.")
+    ws.cell(1, 2, f"Приложение №1.1 к Договору № {contract_no} от {contract_date}")
     ws.cell(2, 2, "Спецификация на Товар/Оборудование, подлежащего монтажу/пусконаладке")
     for row in (1, 2):
         ws.cell(row, 2).font = Font(name=FONT, size=12, bold=True)
@@ -102,7 +109,7 @@ def _fill_spec_sheet(ws: Worksheet, data: ExportRequest) -> None:
     first = 4
     row = first
     for number, item in enumerate(data.summary, start=1):
-        _write_spec_row(ws, row, number, item)
+        _write_spec_row(ws, row, number, item, kp)
         row += 1
     last = row - 1
 
@@ -117,7 +124,7 @@ def _fill_spec_sheet(ws: Worksheet, data: ExportRequest) -> None:
             ws.cell(row, col).border = BORDER
         row += 1
 
-    _write_signatures(ws, row + 2)
+    _write_signatures(ws, row + 2, kp)
     ws.freeze_panes = "A4"
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToWidth = 1
@@ -126,7 +133,15 @@ def _fill_spec_sheet(ws: Worksheet, data: ExportRequest) -> None:
     ws.print_area = f"A1:{get_column_letter(last_col)}{row + 8}"
 
 
-def _write_spec_row(ws: Worksheet, r: int, number: int, item: SummaryItem) -> None:
+def _write_spec_row(ws: Worksheet, r: int, number: int, item: SummaryItem, kp: KpSettings | None) -> None:
+    # Без параметров КП базовая цена идёт в графу M как есть; с параметрами — через правила
+    # kp.price_row (наценка → J, СМР → K, сумма → M).
+    installation: float | None = None
+    unit_total: float | None = item.price
+    if kp is not None and item.price is not None:
+        p = price_row(item.price, kp)
+        installation = p.installation or None
+        unit_total = p.unit_total
     values: list[object] = [
         number,
         item.section,
@@ -138,9 +153,9 @@ def _write_spec_row(ws: Worksheet, r: int, number: int, item: SummaryItem) -> No
         f"=J{r}/(1+L{r})",
         f"=H{r}*F{r}",
         f"=M{r}-K{r}",
-        None,  # цена СМР — заполняет поставщик
-        VAT_RATE,
-        item.price,  # цена за ед. с НДС: из интерфейса/этапа цен, иначе заполняет поставщик
+        installation,  # цена СМР за ед.; пусто — заполняет поставщик
+        kp.vat_rate if kp is not None else VAT_RATE,
+        unit_total,  # цена за ед. вкл. СМР, с НДС; пусто — заполняет поставщик
         f"=F{r}*M{r}",
         _supplier_note(item),
     ]
@@ -173,12 +188,14 @@ def _supplier_note(item: SummaryItem) -> str:
     return "; ".join(parts)
 
 
-def _write_signatures(ws: Worksheet, start: int) -> None:
+def _write_signatures(ws: Worksheet, start: int, kp: KpSettings | None) -> None:
+    customer = kp.customer if kp else Party()
+    supplier = kp.supplier if kp else Party()
     ws.cell(start, 1, "Подписи Сторон").font = Font(name=FONT, size=10, bold=True)
     lines = [
         ("Заказчик:", "Поставщик:"),
-        ("Генеральный директор", "Генеральный директор"),
-        ("", ""),
+        (customer.director or "Генеральный директор", supplier.director or "Генеральный директор"),
+        (customer.name, supplier.name),
         ("_______________________/", "_______________________/"),
     ]
     for offset, (left, right) in enumerate(lines, start=3):
@@ -186,6 +203,142 @@ def _write_signatures(ws: Worksheet, start: int) -> None:
         ws.cell(r, 2, left).font = Font(name=FONT, size=10)
         ws.merge_cells(start_row=r, start_column=6, end_row=r, end_column=12)
         ws.cell(r, 6, right).font = Font(name=FONT, size=10)
+
+
+# ---------- лист «КП» ----------
+
+KP_SECTION_COLUMNS = [
+    ("№", 5),
+    ("Раздел", 46),
+    ("Позиций", 9),
+    ("Стоимость товара без НДС", 20),
+    ("НДС", 16),
+    ("Стоимость товара с НДС", 20),
+    ("СМР с НДС", 16),
+    ("Итого с НДС", 20),
+]
+
+
+def _fill_kp_sheet(ws: Worksheet, data: ExportRequest, kp: KpSettings) -> None:
+    """Титул предложения: реквизиты, итоги по разделам и общие, условия, подписи.
+
+    Все суммы — формулами на лист «Спецификация», чтобы правка цены в Excel пересчитывала КП.
+    """
+    for idx, (_, width) in enumerate(KP_SECTION_COLUMNS, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
+    bold = Font(name=FONT, size=10, bold=True)
+    normal = Font(name=FONT, size=10)
+    last_col = len(KP_SECTION_COLUMNS)
+
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
+    title = ws.cell(1, 1, f"КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ № {kp.number or '____'} от {format_date(kp.date)}")
+    title.font = Font(name=FONT, size=14, bold=True)
+    title.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 30
+
+    codes = ", ".join(d.doc_code for d in data.documents if d.doc_code) or data.doc_code
+    until = valid_until(kp)
+    info = [
+        ("Поставщик", _party_line(kp.supplier)),
+        ("Заказчик", _party_line(kp.customer)),
+        ("Объект", data.title),
+        ("Основание", f"спецификации технологического оборудования {codes}" if codes else "спецификация технологического оборудования"),
+        ("Действительно до", until or "—"),
+        (
+            "Условия расчёта",
+            f"НДС {kp.vat_rate:.0%}; наценка {kp.markup_percent:g} %; СМР {kp.installation_percent:g} % от цены товара; "
+            f"доставка {kp.delivery_percent:g} % от стоимости товара; цены {'до рубля' if kp.round_to_ruble else 'до копейки'}",
+        ),
+    ]
+    r = 3
+    for label, value in info:
+        ws.cell(r, 1, label).font = bold
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=last_col)
+        cell = ws.cell(r, 2, value)
+        cell.font = normal
+        cell.alignment = Alignment(wrap_text=True, vertical="center")
+        r += 1
+
+    r += 1
+    ws.cell(r, 1, "Состав предложения").font = bold
+    r += 1
+    for idx, (label, _) in enumerate(KP_SECTION_COLUMNS, start=1):
+        cell = ws.cell(r, idx, label)
+        cell.font = bold
+        cell.fill = FILL_HEADER
+        cell.border = BORDER
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws.row_dimensions[r].height = 32
+    r += 1
+
+    first, last = 4, 3 + max(len(data.summary), 1)
+    rng = lambda col: f"'Спецификация'!${col}${first}:${col}${last}"  # noqa: E731
+    sections = list(dict.fromkeys(item.section for item in data.summary))
+    table_first = r
+    for number, section in enumerate(sections, start=1):
+        crit = '"' + section.replace('"', '""') + '"'
+        match = f"({rng('B')}={crit})"
+        values: list[object] = [
+            number,
+            section or "Без раздела",
+            f"=COUNTIF({rng('B')},{crit})",
+            f"=SUMIF({rng('B')},{crit},{rng('I')})",
+            f"=F{r}-D{r}",
+            f"=SUMPRODUCT({match}*{rng('F')}*{rng('J')})",
+            f"=SUMPRODUCT({match}*{rng('F')}*{rng('K')})",
+            f"=SUMIF({rng('B')},{crit},{rng('N')})",
+        ]
+        _write_kp_row(ws, r, values, normal)
+        r += 1
+    table_last = r - 1
+
+    def col_sum(col: str) -> str:
+        return f"=SUM({col}{table_first}:{col}{table_last})" if sections else "=0"
+
+    _write_kp_row(ws, r, ["", "Итого по товару и СМР", col_sum("C"), col_sum("D"), col_sum("E"), col_sum("F"), col_sum("G"), col_sum("H")], bold)
+    goods_row, r = r, r + 1
+    _write_kp_row(ws, r, ["", f"Доставка ({kp.delivery_percent:g} % от стоимости товара с НДС)", "", "", "", "", "", f"=ROUND(F{goods_row}*{kp.delivery_percent}/100,2)"], normal)
+    delivery_row, r = r, r + 1
+    _write_kp_row(ws, r, ["", "ИТОГО ПО ПРЕДЛОЖЕНИЮ, с НДС", "", "", "", "", "", f"=H{goods_row}+H{delivery_row}"], bold)
+    ws.cell(r, 8).font = Font(name=FONT, size=11, bold=True)
+    r += 2
+
+    if kp.terms:
+        ws.cell(r, 1, "Условия").font = bold
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=last_col)
+        cell = ws.cell(r, 2, kp.terms)
+        cell.font = normal
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
+        ws.row_dimensions[r].height = _row_height([(kp.terms, 120)])
+        r += 2
+
+    unpriced = sum(1 for item in data.summary if item.price is None)
+    if unpriced:
+        cell = ws.cell(r, 1, f"Внимание: у {unpriced} позиций из {len(data.summary)} нет цены — в итоги они не вошли.")
+        cell.font = Font(name=FONT, size=10, bold=True, color="C00000")
+        r += 2
+
+    ws.cell(r, 1, "Поставщик:").font = bold
+    ws.cell(r, 2, f"{kp.supplier.director or 'Генеральный директор'} {kp.supplier.name}".strip()).font = normal
+    ws.cell(r + 1, 2, "_______________________/").font = normal
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+
+
+def _party_line(party: Party) -> str:
+    return ", ".join(p for p in (party.name, party.director, party.contacts) if p) or "—"
+
+
+def _write_kp_row(ws: Worksheet, r: int, values: list[object], font: Font) -> None:
+    for idx, value in enumerate(values, start=1):
+        cell = ws.cell(r, idx, value if value != "" else None)
+        cell.font = font
+        cell.border = BORDER
+        cell.alignment = Alignment(horizontal="left" if idx == 2 else "center", vertical="center", wrap_text=True)
+        if idx >= 4:
+            cell.number_format = MONEY
 
 
 # ---------- лист «По помещениям» ----------

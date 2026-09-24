@@ -1,10 +1,11 @@
-// Рабочее пространство объекта: несколько разобранных томов и правки менеджера к своду.
-// Хранится в localStorage, чтобы перезагрузка страницы не теряла работу.
+// Рабочее пространство объекта: несколько разобранных томов, правки менеджера к своду и
+// параметры КП. Хранится в localStorage, чтобы перезагрузка страницы не теряла работу.
 
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-import type { ParsedDocument, SummaryItem } from './api'
+import type { KpSettings, ParsedDocument, Party, SummaryItem } from './api'
+import { DEFAULT_KP } from './kp'
 
 /** Строка свода с клиентскими пометками, которых нет в модели ядра. */
 export interface SummaryRow extends SummaryItem {
@@ -28,11 +29,14 @@ export const rowKey = (k: RowKey) => `${k.docId}:${k.index}`
 interface WorkspaceState {
   title: string
   documents: WorkspaceDocument[]
+  kp: KpSettings
   setTitle: (title: string) => void
   addDocument: (doc: ParsedDocument) => void
   removeDocument: (id: string) => void
   updateRow: (key: RowKey, patch: Partial<SummaryRow>) => void
   updateRows: (keys: RowKey[], patch: Partial<SummaryRow>) => void
+  setKp: (patch: Partial<KpSettings>) => void
+  setKpParty: (side: 'supplier' | 'customer', patch: Partial<Party>) => void
   clear: () => void
 }
 
@@ -63,6 +67,7 @@ export const useWorkspace = create<WorkspaceState>()(
     (set) => ({
       title: '',
       documents: [],
+      kp: DEFAULT_KP,
       setTitle: (title) => set({ title }),
       addDocument: (doc) =>
         set((s) => ({
@@ -73,11 +78,24 @@ export const useWorkspace = create<WorkspaceState>()(
       removeDocument: (id) => set((s) => ({ documents: s.documents.filter((d) => d.id !== id) })),
       updateRow: (key, patch) => set((s) => ({ documents: patchRows(s.documents, [key], patch) })),
       updateRows: (keys, patch) => set((s) => ({ documents: patchRows(s.documents, keys, patch) })),
-      clear: () => set({ title: '', documents: [] }),
+      setKp: (patch) => set((s) => ({ kp: { ...s.kp, ...patch } })),
+      setKpParty: (side, patch) => set((s) => ({ kp: { ...s.kp, [side]: { ...s.kp[side], ...patch } } })),
+      // Реквизиты поставщика и правила расчёта — свои у компании, они переживают смену объекта;
+      // сбрасываются только данные конкретного объекта.
+      clear: () =>
+        set((s) => ({
+          title: '',
+          documents: [],
+          kp: { ...s.kp, number: '', customer: DEFAULT_KP.customer, contract_number: '', contract_date: '' },
+        })),
     }),
     {
       name: 'domeo-spec-workspace',
-      version: 1,
+      version: 2,
+      migrate: (persisted, version) => {
+        const state = persisted as Partial<WorkspaceState>
+        return version < 2 ? { ...state, kp: DEFAULT_KP } : state
+      },
       // localStorage может быть недоступен (приватный режим) — тогда работаем без сохранения.
       storage: {
         getItem: (name) => {

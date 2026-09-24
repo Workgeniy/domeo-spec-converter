@@ -1,4 +1,4 @@
-import type { ParsedDocument, SummaryItem } from './api'
+import type { KpSettings, ParsedDocument, SummaryItem } from './api'
 import type { SummaryRow, WorkspaceDocument } from './store'
 
 /** Строка свода без клиентских пометок — в том виде, в каком её понимает ядро. */
@@ -8,15 +8,15 @@ function toSummaryItem(row: SummaryRow): SummaryItem {
 }
 
 /**
- * Документ для выгрузки: правки применены, исключённые строки убраны. Несколько томов
- * одного объекта склеиваются в один документ — ядро соберёт из него общий Excel.
+ * Документ для выгрузки: правки применены, исключённые строки убраны, параметры КП приложены.
+ * Несколько томов одного объекта склеиваются в один документ — ядро соберёт из него общий Excel.
  */
-export function buildExportRequest(title: string, documents: WorkspaceDocument[]): ParsedDocument {
+export function buildExportRequest(title: string, documents: WorkspaceDocument[], kp: KpSettings): ParsedDocument {
   const keep = (doc: WorkspaceDocument) => doc.doc.summary.filter((r) => !r.excluded).map(toSummaryItem)
 
   if (documents.length === 1) {
     const d = documents[0].doc
-    return { ...d, title: title || d.title, summary: keep(documents[0]) }
+    return { ...d, title: title || d.title, summary: keep(documents[0]), kp }
   }
 
   const codes = documents.map((d) => d.doc.doc_code || d.doc.file_name)
@@ -31,6 +31,7 @@ export function buildExportRequest(title: string, documents: WorkspaceDocument[]
     summary: documents.flatMap(keep),
     warnings: [],
     documents: documents.flatMap((d) => d.doc.documents),
+    kp,
   }
 }
 

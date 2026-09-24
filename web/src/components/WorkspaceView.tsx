@@ -5,15 +5,18 @@ import { useMemo, useState } from 'react'
 
 import { exportExcel } from '../api'
 import { buildExportRequest, downloadBlob } from '../export'
+import { kpTotals } from '../kp'
 import { useWorkspace, type WorkspaceDocument } from '../store'
 import { CheckTable } from './CheckTable'
 import { DetailTable } from './DetailTable'
+import { formatMoney } from './format'
+import { KpPanel } from './KpPanel'
 import { PipelineBar } from './PipelineBar'
 import { SummaryTable } from './SummaryTable'
 import { UploadPane } from './UploadPane'
 
 export function WorkspaceView() {
-  const { title, documents, setTitle, addDocument, removeDocument, clear } = useWorkspace()
+  const { title, documents, kp, setTitle, addDocument, removeDocument, clear } = useWorkspace()
   const [adding, setAdding] = useState(false)
   const [downloading, setDownloading] = useState(false)
 
@@ -21,7 +24,7 @@ export function WorkspaceView() {
     const items = documents.reduce((n, d) => n + d.doc.items.length, 0)
     const rows = documents.flatMap((d) => d.doc.summary)
     const active = rows.filter((r) => !r.excluded)
-    const priced = active.filter((r) => r.price !== null).length
+    const totals = kpTotals(active, kp)
     const warnings = documents.reduce(
       (n, d) =>
         n +
@@ -31,13 +34,13 @@ export function WorkspaceView() {
         d.doc.summary.reduce((m, s) => m + s.warnings.length, 0),
       0,
     )
-    return { items, positions: active.length, excluded: rows.length - active.length, priced, warnings }
-  }, [documents])
+    return { items, positions: active.length, excluded: rows.length - active.length, priced: totals.priced, total: totals.total, warnings }
+  }, [documents, kp])
 
   async function download(docs: WorkspaceDocument[]) {
     setDownloading(true)
     try {
-      const { blob, fileName } = await exportExcel(buildExportRequest(title, docs))
+      const { blob, fileName } = await exportExcel(buildExportRequest(title, docs, kp))
       downloadBlob(blob, fileName)
     } catch (e) {
       notifications.show({ color: 'red', title: 'Не удалось сформировать Excel', message: e instanceof Error ? e.message : String(e) })
@@ -99,6 +102,9 @@ export function WorkspaceView() {
               <Badge variant="outline" color={stats.warnings ? 'yellow' : 'green'}>
                 замечаний: {stats.warnings}
               </Badge>
+              <Badge variant="filled" color={stats.total > 0 ? 'blue' : 'gray'}>
+                итого по КП: {formatMoney(stats.total)} ₽
+              </Badge>
             </Group>
           </Stack>
           <Group>
@@ -149,11 +155,17 @@ export function WorkspaceView() {
       <Tabs defaultValue="summary" keepMounted={false}>
         <Tabs.List>
           <Tabs.Tab value="summary">Свод для КП ({stats.positions})</Tabs.Tab>
+          <Tabs.Tab value="kp" fw={600}>
+            Формирование КП
+          </Tabs.Tab>
           <Tabs.Tab value="detail">По помещениям ({stats.items})</Tabs.Tab>
           <Tabs.Tab value="check">Проверка ({stats.warnings})</Tabs.Tab>
         </Tabs.List>
         <Tabs.Panel value="summary" pt="md">
           <SummaryTable />
+        </Tabs.Panel>
+        <Tabs.Panel value="kp" pt="md">
+          <KpPanel onDownload={() => download(documents)} downloading={downloading} />
         </Tabs.Panel>
         <Tabs.Panel value="detail" pt="md">
           <DetailTable />

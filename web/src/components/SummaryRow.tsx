@@ -2,8 +2,10 @@ import { ActionIcon, Autocomplete, Checkbox, HoverCard, NumberInput, ScrollArea,
 import { IconArrowBackUp, IconTrash } from '@tabler/icons-react'
 import { memo } from 'react'
 
+import type { KpSettings } from '../api'
+import { priceRow } from '../kp'
 import type { RowKey, SummaryRow as Row } from '../store'
-import { formatMoney, formatQty, rowTotal } from './format'
+import { formatMoney, formatQty } from './format'
 
 interface Props {
   number: number
@@ -12,6 +14,7 @@ interface Props {
   selected: boolean
   showDoc: boolean
   sections: string[]
+  kp: KpSettings
   onToggle: (key: string) => void
   onChange: (key: RowKey, patch: Partial<Row>) => void
 }
@@ -28,13 +31,14 @@ function shortDocCode(code: string): string {
 
 /**
  * Строка свода. Мемоизирована: при правке одной ячейки в сторе меняется только объект
- * этой строки, остальные ~150 строк не перерисовываются.
+ * этой строки, остальные строки страницы не перерисовываются.
  */
-export const SummaryRowView = memo(function SummaryRowView({ number, row, rowKey, selected, showDoc, sections, onToggle, onChange }: Props) {
+export const SummaryRowView = memo(function SummaryRowView({ number, row, rowKey, selected, showDoc, sections, kp, onToggle, onChange }: Props) {
   const key = `${rowKey.docId}:${rowKey.index}`
   const excluded = row.excluded === true
   const hasWarnings = row.warnings.length > 0
-  const total = rowTotal(row.qty, row.price)
+  const kpPrice = row.price === null ? null : priceRow(row.price, kp)
+  const total = kpPrice === null || row.qty === null ? null : kpPrice.unitTotal * row.qty
 
   return (
     <Table.Tr
@@ -146,6 +150,16 @@ export const SummaryRowView = memo(function SummaryRowView({ number, row, rowKey
           disabled={excluded}
           styles={{ input: { textAlign: 'right' } }}
         />
+      </Table.Td>
+      <Table.Td>
+        <Tooltip
+          label={kpPrice ? `товар ${formatMoney(kpPrice.sale)} + СМР ${formatMoney(kpPrice.installation)}` : 'нет базовой цены'}
+          disabled={!kpPrice}
+        >
+          <Text size="sm" ta="right" c={kpPrice === null ? 'dimmed' : undefined}>
+            {kpPrice === null ? '—' : formatMoney(kpPrice.unitTotal)}
+          </Text>
+        </Tooltip>
       </Table.Td>
       <Table.Td>
         <Text size="sm" ta="right" c={total === null ? 'dimmed' : undefined}>

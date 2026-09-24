@@ -69,6 +69,31 @@ export interface SourceDocument {
   warnings: string[]
 }
 
+/** Сторона КП: поставщик или заказчик. */
+export interface Party {
+  name: string
+  /** Подписант: должность и ФИО. */
+  director: string
+  contacts: string
+}
+
+/** Параметры КП; правила цены — в web/src/kp.ts (зеркало core/app/export/kp.py). */
+export interface KpSettings {
+  number: string
+  date: string
+  valid_days: number
+  supplier: Party
+  customer: Party
+  contract_number: string
+  contract_date: string
+  vat_rate: number
+  markup_percent: number
+  installation_percent: number
+  delivery_percent: number
+  round_to_ruble: boolean
+  terms: string
+}
+
 export interface ParsedDocument {
   file_name: string
   doc_code: string
@@ -79,6 +104,8 @@ export interface ParsedDocument {
   summary: SummaryItem[]
   warnings: string[]
   documents: SourceDocument[]
+  /** Только в запросе на выгрузку: параметры КП. */
+  kp?: KpSettings | null
 }
 
 export interface Health {

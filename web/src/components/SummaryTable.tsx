@@ -3,14 +3,15 @@ import { IconArrowBackUp, IconTrash } from '@tabler/icons-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { SECTIONS } from '../sections'
+import { kpTotals } from '../kp'
 import { useWorkspace, type RowKey, type SummaryRow } from '../store'
-import { formatMoney, rowTotal } from './format'
+import { formatMoney } from './format'
 import { SummaryRowView } from './SummaryRow'
 
 type Mode = 'all' | 'warnings' | 'noprice' | 'noted' | 'excluded'
 
 // Ширины граф в пикселях; null — «Технические характеристики» забирают остаток.
-const SUMMARY_COLUMNS: (number | null)[] = [36, 46, 96, 180, 200, null, 64, 80, 64, 120, 120, 44]
+const SUMMARY_COLUMNS: (number | null)[] = [36, 46, 96, 170, 190, null, 60, 76, 60, 116, 110, 120, 44]
 const PAGE_SIZE = 50
 
 interface FlatRow {
@@ -21,6 +22,7 @@ interface FlatRow {
 
 export function SummaryTable() {
   const documents = useWorkspace((s) => s.documents)
+  const kp = useWorkspace((s) => s.kp)
   const updateRow = useWorkspace((s) => s.updateRow)
   const updateRows = useWorkspace((s) => s.updateRows)
 
@@ -67,18 +69,10 @@ export function SummaryTable() {
   const pageRows = visible.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
 
   const totals = useMemo(() => {
-    const active = rows.filter((r) => !r.row.excluded)
-    let sum = 0
-    let priced = 0
-    for (const { row } of active) {
-      const t = rowTotal(row.qty, row.price)
-      if (t !== null) {
-        sum += t
-        priced += 1
-      }
-    }
-    return { positions: active.length, excluded: rows.length - active.length, priced, sum }
-  }, [rows])
+    const active = rows.filter((r) => !r.row.excluded).map((r) => r.row)
+    const t = kpTotals(active, kp)
+    return { positions: active.length, excluded: rows.length - active.length, priced: t.priced, sum: t.total }
+  }, [rows, kp])
 
   const onToggle = useCallback((id: string) => {
     setSelected((prev) => {
@@ -145,7 +139,7 @@ export function SummaryTable() {
       </Paper>
 
       {/* Без ограничения высоты: прокручивается вся страница, а не таблица внутри страницы. */}
-      <Table.ScrollContainer minWidth={1560}>
+      <Table.ScrollContainer minWidth={1640}>
         <Table striped={false} highlightOnHover withTableBorder withColumnBorders fz="sm" layout="fixed" verticalSpacing={4}>
           {/* Ширины через colgroup: в фиксированной раскладке ширины на th браузер здесь не учитывает. */}
           <colgroup>
@@ -166,8 +160,9 @@ export function SummaryTable() {
               <Table.Th>Ед.</Table.Th>
               <Table.Th>Кол-во</Table.Th>
               <Table.Th>Помещ.</Table.Th>
-              <Table.Th>Цена за ед., с НДС</Table.Th>
-              <Table.Th>Сумма</Table.Th>
+              <Table.Th>Цена (база), с НДС</Table.Th>
+              <Table.Th>Цена в КП, с НДС</Table.Th>
+              <Table.Th>Сумма в КП</Table.Th>
               <Table.Th />
             </Table.Tr>
           </Table.Thead>
@@ -181,13 +176,14 @@ export function SummaryTable() {
                 selected={selected.has(r.id)}
                 showDoc={showDoc}
                 sections={sections}
+                kp={kp}
                 onToggle={onToggle}
                 onChange={updateRow}
               />
             ))}
             {visible.length === 0 && (
               <Table.Tr>
-                <Table.Td colSpan={12}>
+                <Table.Td colSpan={13}>
                   <Text size="sm" c="dimmed" ta="center" py="md">
                     Нет строк под этот фильтр
                   </Text>
@@ -203,9 +199,9 @@ export function SummaryTable() {
                   {totals.excluded > 0 && ` (исключено ${totals.excluded})`} · с ценой: {totals.priced}
                 </Text>
               </Table.Td>
-              <Table.Td>
+              <Table.Td colSpan={2}>
                 <Text size="sm" fw={600} ta="right">
-                  Итого с НДС
+                  Итого по КП, с НДС
                 </Text>
               </Table.Td>
               <Table.Td>

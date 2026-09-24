@@ -10,7 +10,7 @@ const STEPS: { title: string; status: Status; hint: string }[] = [
   { title: 'Сверка с чертежами', status: 'later', hint: 'позиции на планах против спецификации' },
   { title: 'Подбор по базе 1С', status: 'later', hint: 'артикул, поставщик, характеристики' },
   { title: 'Цены от–до', status: 'later', hint: 'база и открытые источники' },
-  { title: 'Цена в КП', status: 'manual', hint: 'сейчас проставляется вручную в своде' },
+  { title: 'Формирование КП', status: 'manual', hint: 'база цены вручную, наценка/СМР/НДС и документ — автоматически' },
 ]
 
 const LOOK: Record<Status, { color: string; label: string; icon: React.ReactNode }> = {
