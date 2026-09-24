@@ -1,5 +1,5 @@
 // Клиент HTTP API (ASP.NET Core, api/). Ответы — в конверте { success, data, message, errors },
-// ошибки — RFC 7807 ProblemDetails. Типы документа повторают доменную модель
+// ошибки — RFC 7807 ProblemDetails. Типы документа повторяют доменную модель
 // api/src/DomeoSpec.Domain/Specifications/ParsedDocument.cs (JSON в snake_case).
 
 export interface SpecItem {
@@ -18,6 +18,7 @@ export interface SpecItem {
   mass: string
   note: string
   group: string
+  source_doc: string
   warnings: string[]
 }
 
@@ -37,6 +38,9 @@ export interface SummaryItem {
   qty: number | null
   section: string
   note: string
+  /** Цена за единицу с НДС; null — не проставлена. */
+  price: number | null
+  source_doc: string
   groups: GroupQty[]
   item_ids: number[]
   warnings: string[]
@@ -50,6 +54,21 @@ export interface PageInfo {
   warnings: string[]
 }
 
+/** Сводка по одному исходному PDF. */
+export interface SourceDocument {
+  doc_code: string
+  file_name: string
+  title: string
+  spec_title: string
+  pages_total: number
+  spec_pages: number[]
+  ocr_pages: number[]
+  skipped_pages: number[]
+  rows: number
+  positions: number
+  warnings: string[]
+}
+
 export interface ParsedDocument {
   file_name: string
   doc_code: string
@@ -59,6 +78,7 @@ export interface ParsedDocument {
   items: SpecItem[]
   summary: SummaryItem[]
   warnings: string[]
+  documents: SourceDocument[]
 }
 
 export interface Health {

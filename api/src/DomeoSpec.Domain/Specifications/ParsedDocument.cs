@@ -17,6 +17,24 @@ public sealed record ParsedDocument
     public IReadOnlyList<SpecItem> Items { get; init; } = [];
     public IReadOnlyList<SummaryItem> Summary { get; init; } = [];
     public IReadOnlyList<string> Warnings { get; init; } = [];
+    /// <summary>Исходные PDF: один после разбора, несколько — когда фронт объединил тома одного объекта.</summary>
+    public IReadOnlyList<SourceDocument> Documents { get; init; } = [];
+}
+
+/// <summary>Сводка по одному исходному PDF.</summary>
+public sealed record SourceDocument
+{
+    public string DocCode { get; init; } = "";
+    public string FileName { get; init; } = "";
+    public string Title { get; init; } = "";
+    public string SpecTitle { get; init; } = "";
+    public int PagesTotal { get; init; }
+    public IReadOnlyList<int> SpecPages { get; init; } = [];
+    public IReadOnlyList<int> OcrPages { get; init; } = [];
+    public IReadOnlyList<int> SkippedPages { get; init; } = [];
+    public int Rows { get; init; }
+    public int Positions { get; init; }
+    public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
 /// <summary>Одна строка спецификации в том виде, в каком она стоит в PDF.</summary>
@@ -42,6 +60,8 @@ public sealed record SpecItem
     public string Note { get; init; } = "";
     /// <summary>Помещение или раздел, к которому относится строка.</summary>
     public string Group { get; init; } = "";
+    /// <summary>Шифр документа-источника.</summary>
+    public string SourceDoc { get; init; } = "";
     public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
@@ -59,6 +79,9 @@ public sealed record SummaryItem
     /// <summary>«Раздел» в КП.</summary>
     public string Section { get; init; } = "";
     public string Note { get; init; } = "";
+    /// <summary>Цена за единицу с НДС: от менеджера или этапа цен; null — не проставлена.</summary>
+    public double? Price { get; init; }
+    public string SourceDoc { get; init; } = "";
     public IReadOnlyList<GroupQty> Groups { get; init; } = [];
     public IReadOnlyList<int> ItemIds { get; init; } = [];
     public IReadOnlyList<string> Warnings { get; init; } = [];

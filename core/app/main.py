@@ -31,13 +31,16 @@ def health() -> dict:
 
 
 @app.post("/api/parse", response_model=ParsedDocument)
-async def parse(file: UploadFile = File(...), file_name: str | None = Form(None)) -> ParsedDocument:
+def parse(file: UploadFile = File(...), file_name: str | None = Form(None)) -> ParsedDocument:
+    # Обработчик синхронный намеренно: разбор — тяжёлая CPU-работа, и в async-обработчике он
+    # заблокировал бы цикл событий (health и второй разбор ждали бы). Так FastAPI уводит
+    # его в пул потоков.
     # Имя файла в заголовке multipart у некоторых клиентов (в т. ч. .NET) теряет кириллицу,
     # поэтому настоящее имя можно передать отдельным полем формы.
     name = file_name or file.filename or "документ.pdf"
     if not name.lower().endswith(".pdf"):
         raise HTTPException(400, "Ожидается файл PDF")
-    content = await file.read()
+    content = file.file.read()
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "Файл больше 100 МБ")
     try:

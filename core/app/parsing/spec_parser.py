@@ -78,8 +78,12 @@ def parse_pdf(
     default_section = _default_section(result.spec_title)
     for summary in result.summary:
         summary.section = summary.section or default_section
+        summary.source_doc = result.doc_code
+    for item in result.items:
+        item.source_doc = result.doc_code
     if not any(p.kind == "spec" for p in result.pages):
         result.warnings.append("в документе не найдено ни одной страницы со спецификацией")
+    result.documents = [result.source_summary()]
     return result
 
 

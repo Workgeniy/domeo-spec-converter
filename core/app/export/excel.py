@@ -15,7 +15,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from ..models import ExportRequest, SpecItem, SummaryItem
+from ..models import ExportRequest, SourceDocument, SpecItem, SummaryItem
 
 FONT = "Times New Roman"
 THIN = Side(style="thin")
@@ -47,6 +47,7 @@ SPEC_COLUMNS = [
 
 DETAIL_COLUMNS = [
     ("№", 5.6),
+    ("Документ", 18),
     ("Помещение / раздел", 34),
     ("№ поз.", 9),
     ("Наименование", 29),
@@ -139,7 +140,7 @@ def _write_spec_row(ws: Worksheet, r: int, number: int, item: SummaryItem) -> No
         f"=M{r}-K{r}",
         None,  # цена СМР — заполняет поставщик
         VAT_RATE,
-        None,  # цена товара с СМР — заполняет поставщик
+        item.price,  # цена за ед. с НДС: из интерфейса/этапа цен, иначе заполняет поставщик
         f"=F{r}*M{r}",
         _supplier_note(item),
     ]
@@ -195,6 +196,7 @@ def _fill_detail_sheet(ws: Worksheet, items: list[SpecItem]) -> None:
     for r, item in enumerate(items, start=2):
         values: list[object] = [
             r - 1,
+            item.source_doc,
             item.group,
             item.pos,
             item.name,
@@ -212,12 +214,12 @@ def _fill_detail_sheet(ws: Worksheet, items: list[SpecItem]) -> None:
             cell.font = Font(name=FONT, size=10)
             cell.border = BORDER
             cell.alignment = Alignment(
-                horizontal="center" if idx in (1, 3, 8, 9, 11) else "left",
+                horizontal="center" if idx in (1, 4, 9, 10, 12) else "left",
                 vertical="center",
                 wrap_text=True,
             )
         ws.row_dimensions[r].height = _row_height(
-            [(item.description, DETAIL_COLUMNS[4][1]), (item.group, DETAIL_COLUMNS[1][1])]
+            [(item.description, DETAIL_COLUMNS[5][1]), (item.group, DETAIL_COLUMNS[2][1])]
         )
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(DETAIL_COLUMNS))}{max(len(items) + 1, 2)}"
@@ -233,27 +235,38 @@ def _fill_check_sheet(ws: Worksheet, data: ExportRequest) -> None:
     bold = Font(name=FONT, size=10, bold=True)
     normal = Font(name=FONT, size=10)
 
-    spec_pages = [p for p in data.pages if p.kind == "spec"]
-    ocr_pages = [p for p in data.pages if p.source == "ocr"]
-    skipped = [p for p in data.pages if p.source == "skipped"]
-    info = [
-        ("Файл", data.file_name),
-        ("Шифр документа", data.doc_code),
-        ("Объект", data.title),
-        ("Страниц в PDF", len(data.pages)),
-        ("Страниц со спецификацией", ", ".join(str(p.number) for p in spec_pages)),
-        ("Страниц распознано OCR", ", ".join(str(p.number) for p in ocr_pages) or "—"),
-        ("Страниц пропущено (скан без OCR)", ", ".join(str(p.number) for p in skipped) or "—"),
-        ("Строк в спецификации", len(data.items)),
-        ("Позиций в своде", len(data.summary)),
-    ]
+    # Старые клиенты присылают только pages/warnings — тогда сводка по документу строится из них.
+    documents = data.documents or [_legacy_source(data)]
     r = 1
-    for label, value in info:
-        ws.cell(r, 1, label).font = bold
-        ws.cell(r, 3, value).font = normal
+    if data.title:
+        ws.cell(r, 1, "Объект").font = bold
+        ws.cell(r, 3, data.title).font = normal
+        r += 1
+    ws.cell(r, 1, "Строк в спецификации").font = bold
+    ws.cell(r, 3, len(data.items)).font = normal
+    ws.cell(r + 1, 1, "Позиций в своде").font = bold
+    ws.cell(r + 1, 3, len(data.summary)).font = normal
+    ws.cell(r + 2, 1, "Позиций с ценой").font = bold
+    ws.cell(r + 2, 3, sum(1 for s in data.summary if s.price is not None)).font = normal
+    r += 4
+
+    for doc in documents:
+        info = [
+            ("Документ", doc.doc_code or doc.file_name),
+            ("Файл", doc.file_name),
+            ("Спецификация", doc.spec_title or "—"),
+            ("Страниц в PDF", doc.pages_total),
+            ("Страниц со спецификацией", ", ".join(map(str, doc.spec_pages)) or "—"),
+            ("Страниц распознано OCR", ", ".join(map(str, doc.ocr_pages)) or "—"),
+            ("Страниц пропущено (скан без OCR)", ", ".join(map(str, doc.skipped_pages)) or "—"),
+            ("Строк / позиций", f"{doc.rows} / {doc.positions}"),
+        ]
+        for label, value in info:
+            ws.cell(r, 1, label).font = bold if label == "Документ" else normal
+            ws.cell(r, 3, value).font = bold if label == "Документ" else normal
+            r += 1
         r += 1
 
-    r += 1
     ws.cell(r, 1, "Замечания").font = bold
     r += 1
     for idx, title in enumerate(("Где", "Позиция", "Замечание"), start=1):
@@ -263,10 +276,13 @@ def _fill_check_sheet(ws: Worksheet, data: ExportRequest) -> None:
         cell.border = BORDER
     r += 1
 
-    rows: list[tuple[str, str, str]] = [("документ", "", w) for w in data.warnings]
-    rows += [(f"стр. {p.number}", "", w) for p in data.pages for w in p.warnings]
-    rows += [(f"стр. {i.page}", i.pos, w) for i in data.items for w in i.warnings]
-    rows += [("свод", s.pos, w) for s in data.summary for w in s.warnings]
+    def where(doc: str, page: int | None = None) -> str:
+        place = f"стр. {page}" if page else "документ"
+        return f"{doc}, {place}" if doc else place
+
+    rows: list[tuple[str, str, str]] = [(where(doc.doc_code), "", w) for doc in documents for w in doc.warnings]
+    rows += [(where(i.source_doc, i.page), i.pos, w) for i in data.items for w in i.warnings]
+    rows += [(f"свод{', ' + s.source_doc if s.source_doc else ''}", s.pos, w) for s in data.summary for w in s.warnings]
     if not rows:
         ws.cell(r, 1, "Замечаний нет").font = normal
     for where, pos, text in rows:
@@ -276,6 +292,21 @@ def _fill_check_sheet(ws: Worksheet, data: ExportRequest) -> None:
             cell.border = BORDER
             cell.alignment = Alignment(vertical="center", wrap_text=idx == 3)
         r += 1
+
+
+def _legacy_source(data: ExportRequest) -> SourceDocument:
+    return SourceDocument(
+        doc_code=data.doc_code,
+        file_name=data.file_name,
+        title=data.title,
+        pages_total=len(data.pages),
+        spec_pages=[p.number for p in data.pages if p.kind == "spec"],
+        ocr_pages=[p.number for p in data.pages if p.source == "ocr"],
+        skipped_pages=[p.number for p in data.pages if p.source == "skipped"],
+        rows=len(data.items),
+        positions=len(data.summary),
+        warnings=list(data.warnings) + [f"стр. {p.number}: {w}" for p in data.pages for w in p.warnings],
+    )
 
 
 # ---------- общее ----------

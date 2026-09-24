@@ -1,0 +1,164 @@
+import { ActionIcon, Autocomplete, Checkbox, HoverCard, NumberInput, ScrollArea, Table, Text, TextInput, Textarea, Tooltip } from '@mantine/core'
+import { IconArrowBackUp, IconTrash } from '@tabler/icons-react'
+import { memo } from 'react'
+
+import type { RowKey, SummaryRow as Row } from '../store'
+import { formatMoney, formatQty, rowTotal } from './format'
+
+interface Props {
+  number: number
+  row: Row
+  rowKey: RowKey
+  selected: boolean
+  showDoc: boolean
+  sections: string[]
+  onToggle: (key: string) => void
+  onChange: (key: RowKey, patch: Partial<Row>) => void
+}
+
+function toNumber(value: number | string): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/** «ДОО350-ДОН-ПИР-П-ТХ1» → «ТХ1»: в узкой графе хватает хвоста шифра, полный — в подсказке. */
+function shortDocCode(code: string): string {
+  const tail = code.split(/[-–]/).pop() ?? code
+  return tail.trim() || code
+}
+
+/**
+ * Строка свода. Мемоизирована: при правке одной ячейки в сторе меняется только объект
+ * этой строки, остальные ~150 строк не перерисовываются.
+ */
+export const SummaryRowView = memo(function SummaryRowView({ number, row, rowKey, selected, showDoc, sections, onToggle, onChange }: Props) {
+  const key = `${rowKey.docId}:${rowKey.index}`
+  const excluded = row.excluded === true
+  const hasWarnings = row.warnings.length > 0
+  const total = rowTotal(row.qty, row.price)
+
+  return (
+    <Table.Tr
+      style={{
+        background: excluded ? 'var(--mantine-color-gray-1)' : hasWarnings ? 'var(--mantine-color-yellow-0)' : undefined,
+        opacity: excluded ? 0.55 : 1,
+      }}
+    >
+      <Table.Td>
+        <Checkbox size="xs" checked={selected} onChange={() => onToggle(key)} aria-label="выбрать строку" />
+      </Table.Td>
+      <Table.Td>
+        <Text size="sm" c="dimmed">
+          {number}
+        </Text>
+      </Table.Td>
+      <Table.Td>
+        <Text size="sm" fw={500} td={excluded ? 'line-through' : undefined}>
+          {row.pos}
+        </Text>
+        {showDoc && (
+          <Tooltip label={row.source_doc} disabled={!row.source_doc}>
+            <Text size="xs" c="dimmed" truncate>
+              {shortDocCode(row.source_doc)}
+            </Text>
+          </Tooltip>
+        )}
+      </Table.Td>
+      <Table.Td>
+        <Autocomplete
+          size="xs"
+          variant="filled"
+          data={sections}
+          value={row.section}
+          onChange={(section) => onChange(rowKey, { section })}
+          placeholder="раздел КП"
+          disabled={excluded}
+          limit={20}
+        />
+      </Table.Td>
+      <Table.Td>
+        <TextInput size="xs" variant="filled" value={row.name} onChange={(e) => onChange(rowKey, { name: e.currentTarget.value })} disabled={excluded} />
+      </Table.Td>
+      <Table.Td>
+        <Textarea
+          size="xs"
+          variant="filled"
+          autosize
+          minRows={1}
+          maxRows={4}
+          value={row.description}
+          onChange={(e) => onChange(rowKey, { description: e.currentTarget.value })}
+          disabled={excluded}
+        />
+        {hasWarnings && (
+          <Text size="xs" c="orange.8" mt={2}>
+            {row.warnings.join('; ')}
+          </Text>
+        )}
+        {row.note && (
+          <Text size="xs" c="dimmed" mt={2}>
+            Примечание: {row.note}
+          </Text>
+        )}
+      </Table.Td>
+      <Table.Td>
+        <TextInput size="xs" variant="filled" value={row.unit} onChange={(e) => onChange(rowKey, { unit: e.currentTarget.value })} disabled={excluded} />
+      </Table.Td>
+      <Table.Td>
+        <NumberInput
+          size="xs"
+          variant="filled"
+          hideControls
+          decimalScale={3}
+          value={row.qty ?? ''}
+          onChange={(v) => onChange(rowKey, { qty: toNumber(v) })}
+          disabled={excluded}
+          styles={{ input: { textAlign: 'right' } }}
+        />
+      </Table.Td>
+      <Table.Td>
+        <HoverCard width={380} shadow="md" withArrow openDelay={150}>
+          <HoverCard.Target>
+            <Text size="sm" ta="center" style={{ cursor: 'help', textDecoration: 'underline dotted' }}>
+              {row.groups.length}
+            </Text>
+          </HoverCard.Target>
+          <HoverCard.Dropdown>
+            <ScrollArea.Autosize mah={300}>
+              {row.groups.map((g, i) => (
+                <Text key={i} size="xs">
+                  {g.group || '— без помещения —'}: <b>{formatQty(g.qty)}</b>
+                </Text>
+              ))}
+            </ScrollArea.Autosize>
+          </HoverCard.Dropdown>
+        </HoverCard>
+      </Table.Td>
+      <Table.Td>
+        <NumberInput
+          size="xs"
+          variant="filled"
+          hideControls
+          decimalScale={2}
+          thousandSeparator=" "
+          value={row.price ?? ''}
+          onChange={(v) => onChange(rowKey, { price: toNumber(v) })}
+          placeholder="—"
+          disabled={excluded}
+          styles={{ input: { textAlign: 'right' } }}
+        />
+      </Table.Td>
+      <Table.Td>
+        <Text size="sm" ta="right" c={total === null ? 'dimmed' : undefined}>
+          {formatMoney(total)}
+        </Text>
+      </Table.Td>
+      <Table.Td>
+        <Tooltip label={excluded ? 'Вернуть в КП' : 'Исключить из КП'}>
+          <ActionIcon variant="subtle" color={excluded ? 'blue' : 'red'} onClick={() => onChange(rowKey, { excluded: !excluded })} aria-label="исключить">
+            {excluded ? <IconArrowBackUp size={16} /> : <IconTrash size={16} />}
+          </ActionIcon>
+        </Tooltip>
+      </Table.Td>
+    </Table.Tr>
+  )
+})

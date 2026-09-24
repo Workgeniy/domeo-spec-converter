@@ -25,6 +25,7 @@ class SpecItem(BaseModel):
     mass: str = ""
     note: str = ""
     group: str = ""  # помещение или раздел, к которому относится строка
+    source_doc: str = ""  # шифр документа-источника (важно, когда в выгрузке несколько томов)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -46,9 +47,27 @@ class SummaryItem(BaseModel):
     qty: float | None = None
     section: str = ""  # «Раздел» в КП
     note: str = ""
+    price: float | None = None  # цена за единицу с НДС — проставляется менеджером или этапом цен
+    source_doc: str = ""
     groups: list[GroupQty] = Field(default_factory=list)
     item_ids: list[int] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class SourceDocument(BaseModel):
+    """Сводка по одному исходному PDF. В выгрузке из нескольких томов их несколько."""
+
+    doc_code: str = ""
+    file_name: str = ""
+    title: str = ""
+    spec_title: str = ""
+    pages_total: int = 0
+    spec_pages: list[int] = Field(default_factory=list)
+    ocr_pages: list[int] = Field(default_factory=list)
+    skipped_pages: list[int] = Field(default_factory=list)
+    rows: int = 0
+    positions: int = 0
+    warnings: list[str] = Field(default_factory=list)  # замечания документа и страниц
 
 
 PageKind = Literal["spec", "other"]
@@ -72,14 +91,31 @@ class ParsedDocument(BaseModel):
     items: list[SpecItem] = Field(default_factory=list)
     summary: list[SummaryItem] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    documents: list[SourceDocument] = Field(default_factory=list)  # один элемент после разбора
 
     @property
     def spec_pages(self) -> list[PageInfo]:
         return [p for p in self.pages if p.kind == "spec"]
 
+    def source_summary(self) -> SourceDocument:
+        return SourceDocument(
+            doc_code=self.doc_code,
+            file_name=self.file_name,
+            title=self.title,
+            spec_title=self.spec_title,
+            pages_total=len(self.pages),
+            spec_pages=[p.number for p in self.pages if p.kind == "spec"],
+            ocr_pages=[p.number for p in self.pages if p.source == "ocr"],
+            skipped_pages=[p.number for p in self.pages if p.source == "skipped"],
+            rows=len(self.items),
+            positions=len(self.summary),
+            warnings=list(self.warnings) + [f"стр. {p.number}: {w}" for p in self.pages for w in p.warnings],
+        )
+
 
 class ExportRequest(BaseModel):
-    """Данные для формирования Excel. Фронт может прислать отредактированные строки."""
+    """Данные для формирования Excel. Фронт может прислать отредактированные строки,
+    в том числе объединённые из нескольких томов одного объекта."""
 
     file_name: str = "спецификация"
     doc_code: str = ""
@@ -88,3 +124,4 @@ class ExportRequest(BaseModel):
     summary: list[SummaryItem] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     pages: list[PageInfo] = Field(default_factory=list)
+    documents: list[SourceDocument] = Field(default_factory=list)

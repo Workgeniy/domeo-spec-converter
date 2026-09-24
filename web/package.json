@@ -16,7 +16,8 @@
     "@mantine/notifications": "^9.6.2",
     "@tabler/icons-react": "^3.48.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

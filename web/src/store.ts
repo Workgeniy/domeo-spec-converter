@@ -1,0 +1,108 @@
+// Рабочее пространство объекта: несколько разобранных томов и правки менеджера к своду.
+// Хранится в localStorage, чтобы перезагрузка страницы не теряла работу.
+
+import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
+
+import type { ParsedDocument, SummaryItem } from './api'
+
+/** Строка свода с клиентскими пометками, которых нет в модели ядра. */
+export interface SummaryRow extends SummaryItem {
+  /** Исключена из КП (например, «закупается образовательной организацией»). */
+  excluded?: boolean
+}
+
+export interface WorkspaceDocument {
+  id: string
+  loadedAt: string
+  doc: Omit<ParsedDocument, 'summary'> & { summary: SummaryRow[] }
+}
+
+export interface RowKey {
+  docId: string
+  index: number
+}
+
+export const rowKey = (k: RowKey) => `${k.docId}:${k.index}`
+
+interface WorkspaceState {
+  title: string
+  documents: WorkspaceDocument[]
+  setTitle: (title: string) => void
+  addDocument: (doc: ParsedDocument) => void
+  removeDocument: (id: string) => void
+  updateRow: (key: RowKey, patch: Partial<SummaryRow>) => void
+  updateRows: (keys: RowKey[], patch: Partial<SummaryRow>) => void
+  clear: () => void
+}
+
+function newId(): string {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function patchRows(documents: WorkspaceDocument[], keys: RowKey[], patch: Partial<SummaryRow>): WorkspaceDocument[] {
+  const byDoc = new Map<string, Set<number>>()
+  for (const k of keys) {
+    if (!byDoc.has(k.docId)) byDoc.set(k.docId, new Set())
+    byDoc.get(k.docId)!.add(k.index)
+  }
+  return documents.map((d) => {
+    const indices = byDoc.get(d.id)
+    if (!indices) return d
+    return {
+      ...d,
+      doc: { ...d.doc, summary: d.doc.summary.map((row, i) => (indices.has(i) ? { ...row, ...patch } : row)) },
+    }
+  })
+}
+
+export const useWorkspace = create<WorkspaceState>()(
+  persist(
+    (set) => ({
+      title: '',
+      documents: [],
+      setTitle: (title) => set({ title }),
+      addDocument: (doc) =>
+        set((s) => ({
+          // Название объекта берём из первого тома, если менеджер ещё ничего не ввёл.
+          title: s.title || doc.title,
+          documents: [...s.documents, { id: newId(), loadedAt: new Date().toISOString(), doc }],
+        })),
+      removeDocument: (id) => set((s) => ({ documents: s.documents.filter((d) => d.id !== id) })),
+      updateRow: (key, patch) => set((s) => ({ documents: patchRows(s.documents, [key], patch) })),
+      updateRows: (keys, patch) => set((s) => ({ documents: patchRows(s.documents, keys, patch) })),
+      clear: () => set({ title: '', documents: [] }),
+    }),
+    {
+      name: 'domeo-spec-workspace',
+      version: 1,
+      // localStorage может быть недоступен (приватный режим) — тогда работаем без сохранения.
+      storage: {
+        getItem: (name) => {
+          try {
+            const raw = localStorage.getItem(name)
+            return raw ? JSON.parse(raw) : null
+          } catch {
+            return null
+          }
+        },
+        setItem: (name, value) => {
+          try {
+            localStorage.setItem(name, JSON.stringify(value))
+          } catch {
+            // переполнение или запрет — правки живут только в памяти вкладки
+          }
+        },
+        removeItem: (name) => {
+          try {
+            localStorage.removeItem(name)
+          } catch {
+            // ничего
+          }
+        },
+      },
+    },
+  ),
+)
