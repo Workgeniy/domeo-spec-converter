@@ -85,7 +85,9 @@ def test_scan_with_real_tesseract(synthetic_scan_pdf: Path) -> None:
     doc = parse_pdf(synthetic_scan_pdf, ocr=TesseractProvider())
     assert doc.pages[0].kind == "spec" and doc.pages[0].source == "ocr"
     assert [i.pos for i in doc.items] == ["2.1", "2.10", "б/н"]
-    assert doc.items[1].qty == 26 and doc.items[1].unit == "шт."
+    # Одиночные цифры («1», «2») общий проход читает плохо — их добирает повторное чтение ячейки.
+    assert [i.qty for i in doc.items] == [1, 26, 2]
+    assert [i.unit for i in doc.items] == ["шт.", "шт.", "компл."]
 
 
 def test_detect_rules_on_raster(synthetic_scan_pdf: Path) -> None:

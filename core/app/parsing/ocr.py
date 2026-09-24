@@ -32,6 +32,10 @@ POINTS_PER_INCH = 72.0
 CELL_GAP_PX = 30
 # Меньше стольких тёмных пикселей — ячейка пустая, распознавать нечего.
 BLANK_CELL_DARK_PX = 25
+# Отступ от линии сетки внутрь ячейки и полоса у края, в которой остатки линий затираются:
+# обрывок линии в вырезке Tesseract принимает за символ («—», «_», «ВИ»).
+CELL_INSET_PX = 4
+CELL_EDGE_PX = 10
 
 
 @dataclass(frozen=True)
@@ -65,9 +69,19 @@ class TesseractProvider:
         return shutil.which("tesseract") is not None
 
     def recognize(self, image: Image.Image, regions: list[Region]) -> list[Word]:
+        return self._run(image, "--psm 6")
+
+    def recognize_cell(self, image: Image.Image, digits: bool = False) -> list[Word]:
+        """Повторное чтение одной ячейки как одной строки; ``digits`` — только цифры."""
+        config = "--psm 7"
+        if digits:
+            config += " -c tessedit_char_whitelist=0123456789.,"
+        return self._run(image, config)
+
+    def _run(self, image: Image.Image, config: str) -> list[Word]:
         import pytesseract
 
-        data = pytesseract.image_to_data(image, lang=self.lang, config="--psm 6", output_type=pytesseract.Output.DICT)
+        data = pytesseract.image_to_data(image, lang=self.lang, config=config, output_type=pytesseract.Output.DICT)
         words: list[Word] = []
         for i, text in enumerate(data["text"]):
             text = (text or "").strip()
@@ -115,17 +129,32 @@ def grid_cells(rules: Rules, image: Image.Image, page_w: float, page_h: float, s
     ys = [round(y / scale) for y in rules.rows(page_w * 0.35)]
     if len(xs) < 3 or len(ys) < 3:
         return []
-    dark = np.asarray(image) < 128
     cells: list[tuple[int, int, int, int]] = []
     for y0, y1 in zip(ys, ys[1:]):
         for x0, x1 in zip(xs, xs[1:]):
-            box = (x0 + 3, y0 + 3, x1 - 3, y1 - 3)
+            box = (x0 + CELL_INSET_PX, y0 + CELL_INSET_PX, x1 - CELL_INSET_PX, y1 - CELL_INSET_PX)
             if box[2] - box[0] < 8 or box[3] - box[1] < 8:
                 continue
-            if np.count_nonzero(dark[box[1] : box[3], box[0] : box[2]]) < BLANK_CELL_DARK_PX:
+            if np.count_nonzero(np.asarray(crop_cell(image, box)) < 128) < BLANK_CELL_DARK_PX:
                 continue
             cells.append(box)
     return cells
+
+
+def crop_cell(image: Image.Image, box: tuple[int, int, int, int]) -> Image.Image:
+    """Вырезка ячейки с затёртыми остатками линий сетки у краёв."""
+    arr = np.array(image.crop(box))
+    h, w = arr.shape
+    edge = min(CELL_EDGE_PX, h // 4, w // 4)
+    for band in (arr[:edge], arr[h - edge :]):
+        for row in band:
+            if np.count_nonzero(row < 128) > 0.5 * w:
+                row[:] = 255
+    for band in (arr[:, :edge], arr[:, w - edge :]):
+        for col in band.T:
+            if np.count_nonzero(col < 128) > 0.5 * h:
+                col[:] = 255
+    return Image.fromarray(arr)
 
 
 def _recognize_cells(image: Image.Image, cells: list[tuple[int, int, int, int]], provider: OcrProvider) -> list[Word]:
@@ -136,19 +165,54 @@ def _recognize_cells(image: Image.Image, cells: list[tuple[int, int, int, int]],
     regions: list[Region] = []
     y = 0
     for x0, y0, x1, y1 in cells:
-        canvas.paste(image.crop((x0, y0, x1, y1)), (0, y))
+        canvas.paste(crop_cell(image, (x0, y0, x1, y1)), (0, y))
         regions.append(Region(x0, y0, x1, y1, y))
         y += (y1 - y0) + CELL_GAP_PX
 
     words: list[Word] = []
+    found: dict[Region, list[Word]] = {r: [] for r in regions}
     for w in provider.recognize(canvas, regions):
         cy = (w.y0 + w.y1) / 2
         region = next((r for r in regions if r.canvas_y <= cy < r.canvas_y + (r.y1 - r.y0)), None)
         if region is None:
             continue
         dy = region.y0 - region.canvas_y
-        words.append(Word(w.x0 + region.x0, w.y0 + dy, w.x1 + region.x0, w.y1 + dy, w.text, w.block))
+        found[region].append(Word(w.x0 + region.x0, w.y0 + dy, w.x1 + region.x0, w.y1 + dy, w.text, w.block))
+
+    # Одиночные символы (количество «1», «2») общий проход читает плохо: «1» → «И», «2» → пусто.
+    # Такие ячейки перечитываются по одной как строка, при неудаче — в режиме «только цифры».
+    retry = getattr(provider, "recognize_cell", None)
+    for region, region_words in found.items():
+        if retry is not None and _looks_weak(region_words):
+            region_words[:] = _retry_cell(image, region, retry) or region_words
+        words.extend(region_words)
     return words
+
+
+def _looks_weak(words: list[Word]) -> bool:
+    return not words or (len(words) == 1 and len(words[0].text) == 1 and not words[0].text.isdigit())
+
+
+def _retry_cell(image: Image.Image, region: Region, retry) -> list[Word]:
+    pad, zoom = 12, 2
+    crop = crop_cell(image, (region.x0, region.y0, region.x1, region.y1))
+    big = Image.new("L", (crop.width * zoom + 2 * pad, crop.height * zoom + 2 * pad), 255)
+    big.paste(crop.resize((crop.width * zoom, crop.height * zoom), Image.LANCZOS), (pad, pad))
+    result = retry(big)
+    if _looks_weak(result):
+        # Строкой тоже не прочиталось (или снова одна буква вместо цифры) — пробуем как число.
+        result = retry(big, True) or result
+    return [
+        Word(
+            region.x0 + (w.x0 - pad) / zoom,
+            region.y0 + (w.y0 - pad) / zoom,
+            region.x0 + (w.x1 - pad) / zoom,
+            region.y0 + (w.y1 - pad) / zoom,
+            w.text,
+            w.block,
+        )
+        for w in result
+    ]
 
 
 def detect_rules(pixmap: pymupdf.Pixmap, scale: float, min_run_px: int = 40) -> Rules:
