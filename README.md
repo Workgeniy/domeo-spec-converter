@@ -21,24 +21,42 @@
   текст распознаётся Tesseract'ом и идёт по тому же конвейеру. Без установленного
   Tesseract такие страницы помечаются как пропущенные.
 
-## Стек
+## Устройство
 
-- **Backend:** Python 3.12, FastAPI, PyMuPDF (текст и линии из PDF), openpyxl, pytesseract.
-- **Frontend:** React 19 + Vite + TypeScript, Mantine.
-- Python выбран из-за PyMuPDF (координаты текста и векторных линий) и задела под
-  следующие этапы (OCR, сопоставление с номенклатурой через LLM).
+```
+web (React) ──► api (ASP.NET Core 9) ──► core (Python, FastAPI)
+                 обвязка: контракт API,      ядро разбора: PDF → строки,
+                 позже 1С, цены, КП          свод, Excel, OCR
+```
+
+| Часть | Стек | Роль |
+|---|---|---|
+| `core/` | Python 3.12, FastAPI, PyMuPDF, openpyxl, pytesseract | внутренний сервис разбора; наружу не смотрит |
+| `api/` | ASP.NET Core 9, Clean Architecture (Domain / Application / Infrastructure / Api) | единственный вход для фронта; сюда встанут 1С, цены, КП |
+| `web/` | React 19 + Vite + TypeScript, Mantine | интерфейс |
+
+Ядро оставлено на Python из-за PyMuPDF (координаты текста и векторных линий) и задела
+под OCR и сопоставление с номенклатурой через LLM. Вся бизнес-обвязка — на C#, как в
+остальных сервисах Domeo.
 
 ## Запуск
 
-Backend:
+Ядро разбора:
 
 ```bash
-cd server
+cd core
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 ```
 
-Frontend (в разработке проксирует `/api` на порт 8000):
+API (адрес ядра — `Engine:BaseUrl` в `appsettings.json`):
+
+```bash
+cd api
+dotnet run --project src/DomeoSpec.Api
+```
+
+Фронтенд (в разработке проксирует `/api` на порт 5080):
 
 ```bash
 cd web
@@ -47,12 +65,12 @@ npm run dev
 ```
 
 Открыть http://localhost:5173. Для продакшена `npm run build` — собранный `web/dist`
-FastAPI раздаёт сам, отдельный веб-сервер не нужен.
+раздаёт сам API, отдельный веб-сервер не нужен.
 
 Разбор из командной строки без веб-интерфейса:
 
 ```bash
-cd server
+cd core
 python -m app.cli "путь/к/тому-ТХ.pdf" результат.xlsx
 ```
 
@@ -66,22 +84,31 @@ Linux — `apt install tesseract-ocr tesseract-ocr-rus`. Бинарник `tesse
 ## Тесты
 
 ```bash
-cd server
-python -m pytest
+cd core && python -m pytest
 ```
 
-Тесты на синтетическом PDF работают всегда. Тесты на реальных документах читают файлы из
-`server/tests/samples/` — папка не в git (документы заказчика), без них тесты пропускаются.
+```bash
+cd api && dotnet test
+```
 
-## API
+Python: синтетический PDF работает всегда; тесты на реальных документах читают
+`core/tests/samples/` (не в git, без файлов пропускаются). .NET: API на подставном ядре
+(`WebApplicationFactory`), плюс сквозной тест против живого ядра — выполняется, только
+если ядро поднято на 8000.
+
+## API (ASP.NET Core, порт 5080)
+
+Ответы — конверт `{ success, data, message, errors }`, ошибки — RFC 7807 ProblemDetails
+с полем `code` (`validation_failed`, `engine_failed`, `service_unavailable`).
 
 | Метод | Путь | Что делает |
 |---|---|---|
-| `GET` | `/api/health` | статус и доступность OCR |
-| `POST` | `/api/parse` | multipart `file` (PDF) → JSON `ParsedDocument` |
-| `POST` | `/api/export` | JSON `ParsedDocument` (можно отредактированный) → `.xlsx` |
+| `GET` | `/api/health` | состояние API и ядра (`engine.available`, `engine.ocr`) |
+| `POST` | `/api/specifications/parse` | multipart `file` (PDF) → `ParsedDocument` |
+| `POST` | `/api/specifications/export` | `ParsedDocument` (можно отредактированный) → `.xlsx` |
 
-Swagger: http://localhost:8000/docs.
+Swagger API: http://localhost:5080/swagger. Внутренний API ядра (8000): `/api/parse`,
+`/api/export`, `/api/health`, Swagger на http://localhost:8000/docs.
 
 ## Документация
 

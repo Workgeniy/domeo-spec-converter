@@ -1,4 +1,8 @@
-"""HTTP API: разбор PDF со спецификацией и выгрузка в Excel."""
+"""HTTP API ядра разбора: PDF со спецификацией -> JSON, JSON -> Excel.
+
+Это внутренний сервис: наружу его закрывает ASP.NET Core API (api/), который и
+разговаривает с фронтом. Поэтому здесь нет CORS, авторизации и раздачи статики.
+"""
 
 from __future__ import annotations
 
@@ -7,10 +11,8 @@ import re
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
-from fastapi.staticfiles import StaticFiles
 
 from .export.excel import build_workbook
 from .models import ExportRequest, ParsedDocument
@@ -19,14 +21,7 @@ from .parsing.spec_parser import parse_pdf
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
-app = FastAPI(title="Domeo Spec Converter", version="0.1.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["Content-Disposition"],
-)
+app = FastAPI(title="Domeo Spec Converter — ядро разбора", version="0.1.0")
 
 
 @app.get("/api/health")
@@ -36,8 +31,10 @@ def health() -> dict:
 
 
 @app.post("/api/parse", response_model=ParsedDocument)
-async def parse(file: UploadFile = File(...)) -> ParsedDocument:
-    name = file.filename or "документ.pdf"
+async def parse(file: UploadFile = File(...), file_name: str | None = Form(None)) -> ParsedDocument:
+    # Имя файла в заголовке multipart у некоторых клиентов (в т. ч. .NET) теряет кириллицу,
+    # поэтому настоящее имя можно передать отдельным полем формы.
+    name = file_name or file.filename or "документ.pdf"
     if not name.lower().endswith(".pdf"):
         raise HTTPException(400, "Ожидается файл PDF")
     content = await file.read()
@@ -62,9 +59,3 @@ def export(data: ExportRequest) -> StreamingResponse:
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
     )
-
-
-# Собранный фронтенд (web/dist) раздаётся тем же процессом, если он есть.
-_dist = Path(__file__).resolve().parents[2] / "web" / "dist"
-if _dist.is_dir():
-    app.mount("/", StaticFiles(directory=_dist, html=True), name="web")

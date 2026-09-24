@@ -8,13 +8,35 @@ PDF ─► [1. Извлечение] ─► [2. Сверка с чертежам
 ```
 
 Каждый шаг — отдельный модуль с явным входом и выходом (pydantic-модели из
-`server/app/models.py`). Шаг можно перезапустить отдельно, а его результат — посмотреть
+`core/app/models.py`). Шаг можно перезапустить отдельно, а его результат — посмотреть
 и поправить руками до следующего шага. Этап 1 реализует шаги 1 и 5.
 
-## Этап 1: разбор PDF
+## Три части
 
 ```
-server/app/
+web (React) ──► api (ASP.NET Core) ──► core (Python)
+```
+
+- **core** — ядро разбора. Внутренний HTTP-сервис без авторизации, CORS и статики: наружу
+  его не публикуют. Всё, что связано с PDF, OCR и Excel, живёт здесь.
+- **api** — обвязка на C# по Clean Architecture (`Domain → Application → Infrastructure → Api`).
+  Единственный вход для фронта. Ядро подключено через порт `IParsingEngine`
+  (`Application/Parsing`), реализация — `PythonEngineClient` в Infrastructure: заменить
+  ядро (другой процесс, in-process) — сменить одну регистрацию. Сюда встанут следующие
+  этапы: хранение проектов, 1С, цены, КП.
+- **web** — интерфейс, в разработке проксирует `/api` в api.
+
+Контракт JSON везде snake_case: типы фронта (`web/src/api.ts`), доменные записи C#
+(`DomeoSpec.Domain/Specifications`) и pydantic-модели ядра описывают одну и ту же структуру.
+
+Ошибки в api: `ValidationFailedException` → 400, `EngineFailureException` (ядро не смогло
+разобрать) → 422, `ServiceUnavailableException` (ядро не отвечает) → 503 + `Retry-After`;
+всё как ProblemDetails с полем `code`.
+
+## Ядро: разбор PDF
+
+```
+core/app/
   parsing/
     pdf_reader.py   слова с координатами + линии таблицы (PyMuPDF), фильтр штампов
     ocr.py          сканы: растр → слова (Tesseract) + линии таблицы с растра (numpy)

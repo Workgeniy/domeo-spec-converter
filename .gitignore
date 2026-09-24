@@ -1,9 +1,16 @@
+# ---- .NET ----
+bin/
+obj/
+*.user
+.vs/
+TestResults/
+
 # ---- Python ----
 __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
-server/.data/
+core/.data/
 
 # ---- Node / Vite ----
 node_modules/
@@ -17,8 +24,8 @@ web/.vite/
 !.env.example
 
 # ---- Исходные PDF заказчика (не хранить в git) ----
-server/tests/samples/*
-!server/tests/samples/.gitkeep
+core/tests/samples/*
+!core/tests/samples/.gitkeep
 
 # ---- OS / IDE ----
 .DS_Store

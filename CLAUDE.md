@@ -4,6 +4,10 @@
 Конвейер «PDF раздела ТХ → спецификация → Excel по форме КП». Этап 1 готов; следующие
 этапы — в `docs/PLAN.md`. Архитектура и принятые решения — `docs/ARCHITECTURE.md`.
 
+Три части: `core/` (Python, ядро разбора — только PDF/OCR/Excel), `api/` (ASP.NET Core,
+вся обвязка: контракт для фронта, дальше 1С/цены/КП), `web/` (React). Бизнес-логику
+следующих этапов писать в `api/`, а не в ядре; ядро — через порт `IParsingEngine`.
+
 ## Принципы разбора
 - Разбор по геометрии (координаты слов и линий), а не по текстовому потоку.
 - Не хардкодить формат конкретного проектировщика: столбцы — по словам шапки, границы —
@@ -13,15 +17,23 @@
 - Сканы идут по тому же конвейеру после OCR; OCR — через протокол `OcrProvider`.
 
 ## Тесты (обязательно)
-- `cd server && python -m pytest` — зелёные перед коммитом.
+- `cd core && python -m pytest` и `cd api && dotnet test` — зелёные перед коммитом
+  (dotnet не в PATH: `& "C:\Program Files\dotnet\dotnet.exe" test api/DomeoSpec.sln`).
+- .NET: каждый эндпоинт — тест на `WebApplicationFactory` с подставным `IParsingEngine`
+  (`tests/DomeoSpec.Api.Tests/ApiFactory.cs`), живое ядро не нужно.
 - Синтетический PDF в `tests/conftest.py` покрывает базовые случаи без файлов заказчика.
-- Реальные PDF лежат в `server/tests/samples/` (не в git). Тесты на них фиксируют точные
+- Реальные PDF лежат в `core/tests/samples/` (не в git). Тесты на них фиксируют точные
   числа строк/позиций — при изменении парсера расхождение надо объяснить, а не подогнать.
 - Новую эвристику разбора — сначала проверить на всех трёх образцах (`python -m app.cli`).
 
+## Контракт и слои .NET
+- Clean Architecture: Domain → Application → Infrastructure → Api; ASP.NET/HTTP не тащить в
+  Domain и Application. Ответы — `ApiResponse<T>`, ошибки — ProblemDetails с `code`.
+- JSON везде snake_case. Модель документа описана трижды (`core/app/models.py`,
+  `api/.../Domain/Specifications/ParsedDocument.cs`, `web/src/api.ts`) — менять синхронно.
+
 ## Фронтенд
-- `web/`: React + Vite + TS + Mantine. Типы в `src/api.ts` повторяют `server/app/models.py` —
-  менять синхронно.
+- `web/`: React + Vite + TS + Mantine.
 - `npx tsc -b` без ошибок перед коммитом.
 
 ## Документация

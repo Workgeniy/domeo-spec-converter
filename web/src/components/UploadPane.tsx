@@ -12,12 +12,20 @@ interface Props {
 export function UploadPane({ onParsed }: Props) {
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // undefined — ещё не спросили; null — ядро недоступно или OCR не установлен
   const [ocr, setOcr] = useState<string | null | undefined>(undefined)
+  const [engineDown, setEngineDown] = useState(false)
 
   useEffect(() => {
     getHealth()
-      .then((h) => setOcr(h.ocr))
-      .catch(() => setOcr(null))
+      .then((h) => {
+        setEngineDown(!h.engine.available)
+        setOcr(h.engine.ocr)
+      })
+      .catch(() => {
+        setEngineDown(true)
+        setOcr(null)
+      })
   }, [])
 
   async function handleDrop(files: File[]) {
@@ -69,6 +77,12 @@ export function UploadPane({ onParsed }: Props) {
           <Loader size="sm" />
           <Text size="sm">Разбираем {busy}…</Text>
         </Group>
+      )}
+
+      {engineDown && (
+        <Alert color="orange" title="Ядро разбора не отвечает" icon={<IconX size={18} />}>
+          API работает, но Python-сервис разбора (порт 8000) недоступен — загрузка завершится ошибкой, пока он не поднят.
+        </Alert>
       )}
 
       {error && (
