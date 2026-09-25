@@ -28,8 +28,10 @@ interface Props {
 type Mode = 'all' | 'unmatched' | 'nointernet' | 'noprice'
 const PAGE_SIZE = 50
 // Поиск в интернете — десятки секунд на позицию; пачки маленькие, чтобы прогресс был виден
-// и обрыв связи не терял уже найденное.
+// и обрыв связи не терял уже найденное. Автопоиск (поисковик + чтение страниц) медленнее
+// модели, поэтому пачка ещё меньше.
 const LOOKUP_BATCH = 8
+const LOOKUP_BATCH_AUTO = 3
 const COST_COLUMNS: (number | null)[] = [44, 90, null, 90, 250, 140, 120, 120, 120, 130, 120]
 
 interface FlatRow {
@@ -158,13 +160,14 @@ export function CostPanel({ onDownload, downloading }: Props) {
     setProgress({ done: 0, total: targets.length })
     let searches = 0
     let stopped = false
+    const batchSize = internet?.provider === 'auto' ? LOOKUP_BATCH_AUTO : LOOKUP_BATCH
     try {
-      for (let i = 0; i < targets.length; i += LOOKUP_BATCH) {
+      for (let i = 0; i < targets.length; i += batchSize) {
         if (cancelRef.current) {
           stopped = true
           break
         }
-        const batch = targets.slice(i, i + LOOKUP_BATCH)
+        const batch = targets.slice(i, i + batchSize)
         const lookups = await lookupInternet(
           batch.map((r) => ({ id: r.id, name: r.row.name, description: r.row.description, unit: r.row.unit })),
           scope === 'all',
@@ -192,6 +195,19 @@ export function CostPanel({ onDownload, downloading }: Props) {
   const internetKeys = rows.filter((r) => r.row.internet_price !== null && r.row.internet_price !== undefined).map((r) => r.key)
   const chooseAll = (which: HistoryChoice) => chooseHistoryPrice(matchedKeys, which)
   const searchReady = internet?.configured === true && rows.length > 0 && progress === null
+
+  // Автоматически при открытии вкладки: сопоставить с историей и найти цены там, где ещё не искали.
+  // Долгий поиск виден по прогрессу и останавливается кнопкой; найденное кэшируется.
+  const autoRan = useRef(false)
+  useEffect(() => {
+    if (autoRan.current || priceList === undefined || internet === undefined || rows.length === 0) return
+    autoRan.current = true
+    void (async () => {
+      if (priceList && rows.some((r) => !r.row.history)) await matchAll()
+      if (internet?.configured && missingInternet.length > 0) await searchInternet('missing')
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [priceList, internet, rows.length])
 
   return (
     <Stack gap="md">
@@ -235,15 +251,15 @@ export function CostPanel({ onDownload, downloading }: Props) {
                 сервере ядра, тогда модель сама ищет предложения в интернете.
               </Text>
             )}
-            {internet?.configured && internet.provider === 'suppliers' && (
+            {internet?.configured && (internet.provider === 'suppliers' || internet.provider === 'auto') && (
               <Text size="sm" c="dimmed">
                 {internet.model} ·{' '}
                 <Anchor size="sm" onClick={openSuppliers}>
-                  настроить поставщиков
+                  поставщики
                 </Anchor>
               </Text>
             )}
-            {internet?.configured && internet.provider !== 'suppliers' && (
+            {internet?.configured && internet.provider !== 'suppliers' && internet.provider !== 'auto' && (
               <Text size="sm" c="dimmed">
                 модель {internet.model} · в кэше {internet.cached} позиций · найденное свежее {internet.ttl_days} дн. заново не ищется
               </Text>
@@ -280,7 +296,7 @@ export function CostPanel({ onDownload, downloading }: Props) {
                   loading={progress !== null}
                   disabled={!searchReady}
                 >
-                  {internet?.provider === 'suppliers' ? 'Найти цены у поставщиков' : 'Найти цены в интернете'}
+                  {internet?.provider === 'suppliers' ? 'Найти цены у поставщиков' : internet?.provider === 'auto' ? 'Найти цены у поставщиков и в интернете' : 'Найти цены в интернете'}
                 </Button>
               </Menu.Target>
               <Menu.Dropdown>

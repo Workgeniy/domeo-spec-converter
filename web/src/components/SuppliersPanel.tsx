@@ -3,7 +3,19 @@ import { notifications } from '@mantine/notifications'
 import { IconEye, IconFileSpreadsheet, IconPlayerStop, IconPlus, IconRefresh, IconTrash } from '@tabler/icons-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { addSupplier, crawlSupplier, getSuppliers, removeSupplier, sampleSupplierOffers, stopSupplier, uploadSupplierPriceList, type Supplier, type SupplierIndexInfo, type SupplierOffer } from '../api'
+import {
+  addSupplier,
+  crawlSupplier,
+  getSuppliers,
+  removeSupplier,
+  sampleSupplierOffers,
+  stopSupplier,
+  updateSupplierSettings,
+  uploadSupplierPriceList,
+  type Supplier,
+  type SupplierIndexInfo,
+  type SupplierOffer,
+} from '../api'
 import { formatMoney } from './format'
 
 const POLL_MS = 3000
@@ -109,15 +121,33 @@ export function SuppliersPanel() {
   const [maxPages, setMaxPages] = useState<number | string>(3000)
   const [adding, setAdding] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
+  const [autocrawl, setAutocrawl] = useState<number | string>(300)
+  const [savingSettings, setSavingSettings] = useState(false)
   const timer = useRef<number | null>(null)
 
   const refresh = useCallback(async () => {
     try {
-      setInfo(await getSuppliers())
+      const next = await getSuppliers()
+      setInfo(next)
+      setAutocrawl((current) => (current === 300 ? next.autocrawl_pages : current))
     } catch (e) {
       notifications.show({ color: 'red', title: 'Поставщики', message: message(e) })
     }
   }, [])
+
+  async function saveSettings() {
+    setSavingSettings(true)
+    try {
+      const next = await updateSupplierSettings({ autocrawl_pages: typeof autocrawl === 'number' ? autocrawl : 0 })
+      setInfo(next)
+      setAutocrawl(next.autocrawl_pages)
+      notifications.show({ color: 'green', message: next.autocrawl_pages > 0 ? `Найденные сайты будут обходиться, до ${next.autocrawl_pages} страниц` : 'Найденные сайты обходиться не будут' })
+    } catch (e) {
+      notifications.show({ color: 'red', title: 'Не удалось сохранить настройку', message: message(e) })
+    } finally {
+      setSavingSettings(false)
+    }
+  }
 
   useEffect(() => {
     void refresh()
@@ -183,11 +213,37 @@ export function SuppliersPanel() {
           {info ? `${info.offers} позиций у ${suppliers.length} поставщиков${info.updated_at ? ` · обновлено ${info.updated_at}` : ''}` : 'загружаем…'}
         </Text>
         <Text size="xs" c="dimmed" mt="xs">
-          По сайту поставщика ядро ищет фид YML для Яндекс Маркета, потом карту сайта, потом идёт по ссылкам; цену берёт из разметки
-          страниц (schema.org, OpenGraph). Не чаще двух запросов в секунду, robots.txt уважается. Если на сайте нет разметки или он закрыт
-          для роботов, загрузите прайс-лист xlsx: нужны колонки с наименованием и ценой, шапку найдём сами. Собранные цены попадают в графу
-          «Интернет на дату» вкладки «Себестоимость».
+          Поставщики появляются здесь двумя путями. Автопоиск: при поиске цен во вкладке «Себестоимость» позиция, которой нет в индексе,
+          ищется в интернете{info?.search_engine ? ` (${info.search_engine}, без ключей и оплаты)` : ''}, найденные магазины и их цены
+          попадают сюда сами, а их каталоги встают в очередь на обход. Вручную: сайт или прайс-лист xlsx (нужны колонки с наименованием и
+          ценой, шапку найдём сами). По сайту ядро ищет фид YML, потом карту сайта, потом идёт по ссылкам; цену берёт из разметки страниц.
+          Не чаще двух запросов в секунду, robots.txt уважается. Сайты без разметки цен обходом не берутся — для них прайс-лист.
         </Text>
+        <Group mt="sm" align="flex-end" wrap="wrap">
+          <NumberInput
+            label="Обходить найденные автопоиском сайты, страниц (0 — не обходить)"
+            value={autocrawl}
+            onChange={(v) => setAutocrawl(typeof v === 'number' ? v : String(v))}
+            min={0}
+            max={50000}
+            step={100}
+            w={360}
+            hideControls
+          />
+          <Button variant="default" loading={savingSettings} disabled={!info || autocrawl === info.autocrawl_pages} onClick={saveSettings}>
+            Сохранить
+          </Button>
+          {info && info.queued > 0 && (
+            <Text size="sm" c="dimmed">
+              в очереди на обход: {info.queued}
+            </Text>
+          )}
+          {info && !info.search_engine && (
+            <Text size="sm" c="dimmed">
+              автопоиск выключен (WEB_SEARCH_ENGINE=off или нет библиотеки ddgs)
+            </Text>
+          )}
+        </Group>
         <Group mt="md" align="flex-end" wrap="wrap">
           <TextInput label="Поставщик" placeholder="Например, Кворус" value={name} onChange={(e) => setName(e.currentTarget.value)} w={240} />
           <TextInput label="Сайт (необязательно)" placeholder="https://example.ru" value={site} onChange={(e) => setSite(e.currentTarget.value)} w={280} />
@@ -222,13 +278,27 @@ export function SuppliersPanel() {
           {suppliers.map((s) => (
             <Table.Tr key={s.id}>
               <Table.Td>
-                <Text size="sm" fw={500}>
-                  {s.name}
-                </Text>
+                <Group gap={6} wrap="nowrap">
+                  <Text size="sm" fw={500}>
+                    {s.name}
+                  </Text>
+                  {s.discovered && (
+                    <Tooltip label={s.query ? `Нашёлся автопоиском по запросу «${s.query}»` : 'Нашёлся автопоиском'} multiline w={320}>
+                      <Badge size="xs" variant="light" color="grape" style={{ cursor: 'help' }}>
+                        автопоиск
+                      </Badge>
+                    </Tooltip>
+                  )}
+                </Group>
                 {s.site && (
                   <Anchor href={s.site} target="_blank" rel="noopener noreferrer" size="xs">
                     {s.site}
                   </Anchor>
+                )}
+                {s.discovered && !s.crawled && s.status !== 'running' && (
+                  <Text size="xs" c="dimmed">
+                    пока только страницы из поиска
+                  </Text>
                 )}
               </Table.Td>
               <Table.Td>

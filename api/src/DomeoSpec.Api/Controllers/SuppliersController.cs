@@ -17,6 +17,15 @@ public sealed class SuppliersController(IPricingEngine engine) : ControllerBase
         return ApiResponse<SupplierIndexInfo>.Ok(await engine.GetSuppliersAsync(ct));
     }
 
+    /// <summary>Сколько страниц обходить у сайтов, найденных автопоиском (0 — не обходить).</summary>
+    [HttpPut("settings")]
+    public async Task<ActionResult<ApiResponse<SupplierIndexInfo>>> Settings([FromBody] SupplierSettings body, CancellationToken ct)
+    {
+        if (body.AutocrawlPages is < 0 or > 50_000)
+            throw new ValidationFailedException("Число страниц — от 0 до 50 000.");
+        return ApiResponse<SupplierIndexInfo>.Ok(await engine.UpdateSupplierSettingsAsync(body, ct));
+    }
+
     [HttpPost]
     public async Task<ActionResult<ApiResponse<Supplier>>> Add([FromBody] SupplierCreate body, [FromServices] AddSupplierHandler handler, CancellationToken ct)
     {

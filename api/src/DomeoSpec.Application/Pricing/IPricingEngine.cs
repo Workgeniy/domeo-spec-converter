@@ -40,4 +40,7 @@ public interface IPricingEngine
     Task<Supplier> UploadSupplierPriceListAsync(string id, Stream xlsx, string fileName, CancellationToken ct);
 
     Task<IReadOnlyList<SupplierOffer>> SampleOffersAsync(string id, CancellationToken ct);
+
+    /// <summary>Настройки индекса: сколько страниц обходить у найденных автопоиском сайтов.</summary>
+    Task<SupplierIndexInfo> UpdateSupplierSettingsAsync(SupplierSettings settings, CancellationToken ct);
 }

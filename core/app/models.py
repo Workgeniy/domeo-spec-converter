@@ -308,6 +308,9 @@ class Supplier(BaseModel):
     progress: str = ""  # «страниц 120 из 500, цен 80»
     error: str = ""
     max_pages: int = 3000
+    discovered: bool = False  # найден автопоиском, а не заведён оператором
+    query: str = ""  # по какому запросу нашёлся
+    crawled: bool = False  # каталог обходили целиком (а не только страницы из поиска)
 
 
 class SupplierOffer(BaseModel):
@@ -332,6 +335,13 @@ class SupplierIndexInfo(BaseModel):
     suppliers: list[Supplier] = Field(default_factory=list)
     offers: int = 0
     updated_at: str = ""
+    autocrawl_pages: int = 300  # 0 — найденные автопоиском сайты не обходить
+    queued: int = 0  # сколько сайтов ждёт обхода
+    search_engine: str = ""  # чем ищем в интернете; пусто — автопоиск выключен
+
+
+class SupplierSettings(BaseModel):
+    autocrawl_pages: int = Field(default=300, ge=0, le=50_000)
 
 
 class SupplierSample(BaseModel):

@@ -1,0 +1,219 @@
+"""Автопоиск поставщиков: по позиции спецификации — веб-поиск, чтение найденных страниц по
+разметке, найденные магазины — в индекс поставщиков (и в очередь на обход каталога).
+
+Результат поиска по запросу кэшируется на ``ttl_days``: одинаковые позиции разных объектов
+не гоняют поисковик заново. Маркетплейсы и не-магазины (видео, соцсети, объявления)
+пропускаются: они либо закрыты для роботов, либо цен там нет.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import threading
+import time
+from dataclasses import dataclass, field
+from datetime import date
+from pathlib import Path
+from urllib import robotparser
+from urllib.parse import urlsplit
+
+import httpx
+from bs4 import BeautifulSoup
+
+from ..websearch import SearchEngine, SearchHit
+from .crawler import USER_AGENT
+from .extract import Extracted, extract_offers
+
+DEFAULT_DATA_DIR = Path(__file__).resolve().parents[3] / ".data"
+SKIP_HOSTS = (
+    "ozon.ru", "wildberries.ru", "market.yandex.ru", "yandex.ru", "ya.ru", "avito.ru", "aliexpress", "megamarket.ru",
+    "sbermegamarket.ru", "lamoda.ru", "youtube.com", "youtu.be", "wikipedia.org", "dzen.ru", "vk.com", "ok.ru", "t.me",
+    "pinterest.", "2gis.", "google.", "facebook.com", "instagram.com", "rutube.ru", "otzovik.com", "irecommend.ru",
+    "yell.ru", "zoon.ru", "gosuslugi.ru", "zakupki.gov.ru", "kontur.ru", "rusprofile.ru", "list-org.com", "yandex.com",
+)
+SKIP_EXT = re.compile(r"\.(pdf|doc|docx|xls|xlsx|zip|rar|jpg|jpeg|png|gif|webp)$", re.I)
+MAX_HITS = 8
+PAGE_TIMEOUT = 15.0
+PAGE_DELAY = 0.3
+MAX_BODY = 3 * 1024 * 1024
+
+
+@dataclass
+class DiscoveredPage:
+    url: str
+    host: str
+    site_name: str = ""
+    offers: list[Extracted] = field(default_factory=list)
+
+
+def build_query(name: str) -> str:
+    """«Стул детский регулируемый по высоте №1-№3» → «Стул детский регулируемый по высоте №1-№3 купить»."""
+    text = re.sub(r"\s+", " ", name).strip()
+    return f"{text} купить"[:200]
+
+
+def host_of(url: str) -> str:
+    host = urlsplit(url).netloc.lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def is_shop_candidate(url: str) -> bool:
+    host = host_of(url)
+    if not host or "." not in host or SKIP_EXT.search(urlsplit(url).path or ""):
+        return False
+    return not any(skip in host for skip in SKIP_HOSTS)
+
+
+TITLE_TAIL_NOISE = re.compile(r"\d|купить|цена|прода|магазин|официальн|производител", re.I)
+
+
+def site_name_of(html: str) -> str:
+    """Название магазина: og:site_name; иначе короткий хвост <title> после «|», «—», «-»,
+    если он похож на имя, а не на слоган («купить … от производителя»). Иначе пусто — возьмут хост."""
+    soup = BeautifulSoup(html, "html.parser")
+    meta = soup.find("meta", attrs={"property": "og:site_name"})
+    if meta is not None and meta.get("content"):
+        return " ".join(str(meta.get("content")).split())[:80]
+    title = soup.title.get_text(" ") if soup.title else ""
+    parts = [p.strip() for p in re.split(r"\s[|—–-]\s", title) if p.strip()]
+    if len(parts) < 2:
+        return ""
+    tail = parts[-1]
+    return tail if len(tail) <= 32 and not TITLE_TAIL_NOISE.search(tail) else ""
+
+
+class WebPriceSearch:
+    def __init__(
+        self,
+        engine: SearchEngine,
+        index,  # SupplierIndex — без аннотации, чтобы не тянуть импорт по кругу
+        data_dir: str | Path | None = None,
+        ttl_days: int = 7,
+        max_hits: int = MAX_HITS,
+        client: httpx.Client | None = None,
+        page_delay: float = PAGE_DELAY,
+    ):
+        self.engine = engine
+        self.index = index
+        self.dir = Path(data_dir or os.environ.get("DATA_DIR") or DEFAULT_DATA_DIR)
+        self.path = self.dir / "web_search_cache.json"
+        self.ttl_days = ttl_days
+        self.max_hits = max_hits
+        self.client = client or httpx.Client(timeout=httpx.Timeout(PAGE_TIMEOUT, connect=10.0), follow_redirects=True, headers={"User-Agent": USER_AGENT})
+        self.page_delay = page_delay
+        self._cache: dict[str, dict] = {}
+        self._robots: dict[str, robotparser.RobotFileParser] = {}
+        self._lock = threading.Lock()
+        self._save_lock = threading.Lock()  # параллельные поиски пишут кэш по очереди
+        self._fetch_lock = threading.Lock()
+        self._last_fetch = 0.0
+
+    # ---------- кэш ----------
+
+    def load(self) -> None:
+        if self.path.exists():
+            with self._lock:
+                self._cache = json.loads(self.path.read_text(encoding="utf-8")).get("queries", {})
+
+    def save(self) -> None:
+        with self._save_lock:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            with self._lock:
+                payload = json.dumps({"queries": self._cache}, ensure_ascii=False)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(payload, encoding="utf-8")
+            tmp.replace(self.path)
+
+    @property
+    def cached_queries(self) -> int:
+        with self._lock:
+            return len(self._cache)
+
+    def _fresh(self, query: str, today: str) -> list[DiscoveredPage] | None:
+        with self._lock:
+            entry = self._cache.get(query)
+        if not entry:
+            return None
+        try:
+            age = (date.fromisoformat(today) - date.fromisoformat(entry.get("searched_at", ""))).days
+        except ValueError:
+            return None
+        if not 0 <= age < self.ttl_days:
+            return None
+        return [
+            DiscoveredPage(url=p["url"], host=p["host"], site_name=p.get("site_name", ""), offers=[Extracted(**o) for o in p.get("offers", [])])
+            for p in entry.get("pages", [])
+        ]
+
+    # ---------- поиск ----------
+
+    def find(self, name: str, description: str, unit: str, today: str) -> list[DiscoveredPage]:
+        """Страницы магазинов с предложениями по позиции; найденное сразу уходит в индекс."""
+        query = build_query(name)
+        pages = self._fresh(query, today)
+        if pages is None:
+            hits = self.engine.search(query, max_results=self.max_hits * 3)
+            pages = self._read_pages(hits)
+            with self._lock:
+                self._cache[query] = {
+                    "searched_at": today,
+                    "pages": [{"url": p.url, "host": p.host, "site_name": p.site_name, "offers": [o.__dict__ for o in p.offers]} for p in pages],
+                }
+            self.save()
+        for page in pages:
+            if page.offers:
+                self.index.discover(page.host, page.site_name, query, page.offers)
+        return pages
+
+    def _read_pages(self, hits: list[SearchHit]) -> list[DiscoveredPage]:
+        pages: list[DiscoveredPage] = []
+        seen_hosts: dict[str, int] = {}
+        for hit in hits:
+            if len(pages) >= self.max_hits:
+                break
+            if not is_shop_candidate(hit.url):
+                continue
+            host = host_of(hit.url)
+            if seen_hosts.get(host, 0) >= 2:  # не больше двух страниц с одного сайта
+                continue
+            seen_hosts[host] = seen_hosts.get(host, 0) + 1
+            if not self._allowed(hit.url):
+                continue
+            response = self._get(hit.url)
+            if response is None or "html" not in response.headers.get("content-type", "html"):
+                continue
+            offers = extract_offers(response.text, str(response.url))
+            pages.append(DiscoveredPage(url=str(response.url), host=host, site_name=site_name_of(response.text), offers=offers))
+        return pages
+
+    # ---------- сеть ----------
+
+    def _get(self, url: str) -> httpx.Response | None:
+        with self._fetch_lock:
+            wait = self.page_delay - (time.monotonic() - self._last_fetch)
+            if wait > 0:
+                time.sleep(wait)
+            self._last_fetch = time.monotonic()
+        try:
+            response = self.client.get(url)
+        except httpx.HTTPError:
+            return None
+        if response.status_code != 200 or len(response.content) > MAX_BODY:
+            return None
+        return response
+
+    def _allowed(self, url: str) -> bool:
+        parts = urlsplit(url)
+        base = f"{parts.scheme}://{parts.netloc}"
+        parser = self._robots.get(base)
+        if parser is None:
+            parser = robotparser.RobotFileParser()
+            response = self._get(base + "/robots.txt")
+            parser.parse(response.text.splitlines() if response is not None else [])
+            self._robots[base] = parser
+        try:
+            return parser.can_fetch(USER_AGENT, url) and parser.can_fetch("*", url)
+        except Exception:  # noqa: BLE001
+            return True

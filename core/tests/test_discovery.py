@@ -1,0 +1,176 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import httpx
+from fastapi.testclient import TestClient
+
+from app.main import app, internet_prices, supplier_index
+from app.pricing.internet import AutoSearchProvider
+from app.pricing.suppliers.crawler import CrawlResult
+from app.pricing.suppliers.discovery import WebPriceSearch, build_query, is_shop_candidate, site_name_of
+from app.pricing.suppliers.extract import Extracted
+from app.pricing.suppliers.index import SupplierIndex
+from app.pricing.websearch import SearchHit
+
+client = TestClient(app)
+
+PRODUCT = """<html><head><title>Стул детский регулируемый по высоте №1-№3 — Мебель-Сад</title><meta property="og:site_name" content="Мебель-Сад">
+<script type="application/ld+json">{"@type":"Product","name":"Стул детский регулируемый по высоте №1-№3","offers":{"@type":"Offer","price":"1 350","priceCurrency":"RUB"}}</script>
+</head><body><h1>Стул детский</h1></body></html>"""
+PRODUCT2 = """<html><head><title>Стул детский регулируемый №1-3 | Парта-Плюс</title>
+<script type="application/ld+json">{"@type":"Product","name":"Стул детский регулируемый по высоте №1-№3, бук","offers":{"@type":"Offer","price":"1 490","priceCurrency":"RUB"}}</script>
+</head><body></body></html>"""
+NO_PRICE = "<html><head><title>Статья про стулья — Блог</title></head><body><h1>Как выбрать стул</h1><p>текст</p></body></html>"
+
+
+class FakeEngine:
+    name = "fake-search"
+
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def search(self, query: str, max_results: int = 8) -> list[SearchHit]:
+        self.queries.append(query)
+        return [
+            SearchHit(url="https://www.ozon.ru/category/stul/", title="Ozon"),  # маркетплейс — мимо
+            SearchHit(url="https://mebel-sad.test/catalog/stul-13", title="Стул детский"),
+            SearchHit(url="https://parta-plus.test/product/stul", title="Стул детский регулируемый"),
+            SearchHit(url="https://blog.test/kak-vybrat-stul", title="Как выбрать стул"),
+            SearchHit(url="https://closed.test/product/1", title="Закрыто robots"),
+            SearchHit(url="https://mebel-sad.test/files/price.pdf", title="Прайс"),
+        ]
+
+
+def _client(requests: list[str]) -> httpx.Client:
+    pages = {
+        "https://mebel-sad.test/robots.txt": ("text/plain", "User-agent: *\nDisallow: /files/\n"),
+        "https://mebel-sad.test/catalog/stul-13": ("text/html", PRODUCT),
+        "https://parta-plus.test/product/stul": ("text/html", PRODUCT2),
+        "https://blog.test/kak-vybrat-stul": ("text/html", NO_PRICE),
+        "https://closed.test/robots.txt": ("text/plain", "User-agent: *\nDisallow: /\n"),
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        page = pages.get(str(request.url))
+        if page is None:
+            return httpx.Response(404)
+        return httpx.Response(200, headers={"content-type": page[0]}, content=page[1].encode("utf-8"))
+
+    return httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+
+
+def test_helpers() -> None:
+    assert build_query("  Стул   детский ") == "Стул детский купить"
+    assert is_shop_candidate("https://mebel-sad.test/catalog/1") and not is_shop_candidate("https://www.ozon.ru/x") and not is_shop_candidate("https://a.test/f.pdf")
+    assert site_name_of(PRODUCT) == "Мебель-Сад" and site_name_of(PRODUCT2) == "Парта-Плюс" and site_name_of("<html><title>Просто</title></html>") == ""
+    # Хвост заголовка-слогана — не имя магазина: возьмут хост.
+    assert site_name_of("<html><title>Мойка — купить мойку из нержавеющей стали от производителя</title></html>") == ""
+    assert site_name_of("<html><title>Шкаф | Холодильный шкаф 700 л, 0…+6 °C</title></html>") == ""
+
+
+def test_web_search_fills_index_and_caches(tmp_path: Path) -> None:
+    index = SupplierIndex(data_dir=tmp_path)
+    index.set_settings(0)  # без автообхода
+    engine = FakeEngine()
+    requests: list[str] = []
+    web = WebPriceSearch(engine, index, data_dir=tmp_path, client=_client(requests), page_delay=0)
+    pages = web.find("Стул детский регулируемый по высоте №1-№3", "", "шт.", "2026-09-25")
+    assert [p.host for p in pages if p.offers] == ["mebel-sad.test", "parta-plus.test"]
+    assert "https://closed.test/product/1" not in requests and "https://www.ozon.ru/category/stul/" not in requests
+    assert "https://mebel-sad.test/files/price.pdf" not in requests
+
+    info = index.info()
+    assert info.offers == 2 and sorted(s.name for s in info.suppliers) == ["Мебель-Сад", "Парта-Плюс"]
+    found = next(s for s in info.suppliers if s.name == "Мебель-Сад")
+    assert found.discovered and found.site == "https://mebel-sad.test" and found.query.endswith("купить") and found.status == "done"
+    assert (tmp_path / "web_search_cache.json").exists() and web.cached_queries == 1
+
+    # Повтор той же позиции — из кэша, поисковик и сайты не трогаются.
+    before = len(requests)
+    web.find("Стул детский регулируемый по высоте №1-№3", "", "шт.", "2026-09-25")
+    assert engine.queries == ["Стул детский регулируемый по высоте №1-№3 купить"] and len(requests) == before
+    assert index.info().offers == 2  # дубли не добавились
+
+    reloaded = WebPriceSearch(FakeEngine(), index, data_dir=tmp_path, client=_client([]), page_delay=0)
+    reloaded.load()
+    assert reloaded.cached_queries == 1
+
+
+def test_auto_provider_uses_index_first_then_web(tmp_path: Path) -> None:
+    index = SupplierIndex(data_dir=tmp_path)
+    index.set_settings(0)
+    engine = FakeEngine()
+    web = WebPriceSearch(engine, index, data_dir=tmp_path, client=_client([]), page_delay=0)
+    provider = AutoSearchProvider(index, web)
+
+    lookup = provider.lookup("Стул детский регулируемый по высоте №1-№3", "", "шт.", "2026-09-25")
+    assert lookup.status == "found" and lookup.provider == "auto" and lookup.price == 1420  # медиана 1350 и 1490
+    assert sorted(o.shop for o in lookup.offers) == ["Мебель-Сад", "Парта-Плюс"]
+    assert engine.queries == ["Стул детский регулируемый по высоте №1-№3 купить"]
+
+    # Та же позиция снова — индекс отвечает сам, поисковик не нужен.
+    again = provider.lookup("Стул детский регулируемый по высоте №1-№3", "", "шт.", "2026-09-25")
+    assert again.price == 1420 and len(engine.queries) == 1
+
+    # Ничего не нашлось ни в индексе, ни в интернете — честное «не найдено» с пояснением.
+    class EmptyEngine:
+        name = "empty"
+
+        def search(self, query: str, max_results: int = 8) -> list[SearchHit]:
+            return []
+
+    nothing = AutoSearchProvider(index, WebPriceSearch(EmptyEngine(), index, data_dir=tmp_path, client=_client([]), page_delay=0))
+    miss = nothing.lookup("Шкаф холодильный 700 л", "", "шт.", "2026-09-25")
+    assert miss.status == "not_found" and "автопоиск" in miss.comment
+
+    # Поисковик упал — ответ индекса с пометкой, без исключения.
+    class BrokenEngine:
+        name = "broken"
+
+        def search(self, query: str, max_results: int = 8) -> list[SearchHit]:
+            raise RuntimeError("ratelimit")
+
+    broken = AutoSearchProvider(index, WebPriceSearch(BrokenEngine(), index, data_dir=tmp_path, client=_client([]), page_delay=0))
+    assert "не ответил" in broken.lookup("Ножничный подъёмник", "", "шт.", "2026-09-25").comment
+
+
+class FakeCrawler:
+    def __init__(self, **kwargs):
+        pass
+
+    def crawl(self, site: str) -> CrawlResult:
+        return CrawlResult(offers=[Extracted(name="Стол воспитателя", price=6800, url=f"{site}/p/stol")], pages=1, source="карта сайта")
+
+
+def test_discovered_supplier_is_queued_for_crawl_and_keeps_search_offers(tmp_path: Path) -> None:
+    index = SupplierIndex(data_dir=tmp_path)
+    index._crawler_factory = lambda **kw: FakeCrawler(**kw)
+    index.set_settings(200)
+    web = WebPriceSearch(FakeEngine(), index, data_dir=tmp_path, client=_client([]), page_delay=0)
+    web.find("Стул детский регулируемый по высоте №1-№3", "", "шт.", "2026-09-25")
+    for supplier in index.info().suppliers:
+        index.wait(supplier.id, timeout=10)
+    info = index.info()
+    assert info.queued == 0 and all(s.crawled and s.status == "done" for s in info.suppliers)
+    mebel = next(s for s in info.suppliers if s.name == "Мебель-Сад")
+    names = sorted(o.name for o in index.offers[mebel.id])
+    assert names == ["Стол воспитателя", "Стул детский регулируемый по высоте №1-№3"]  # обход + страница из поиска
+    assert mebel.max_pages == 200 and mebel.source.startswith("карта сайта")
+
+
+def test_settings_endpoint_and_info(tmp_path: Path) -> None:
+    saved = (supplier_index.dir, supplier_index.autocrawl_pages)
+    supplier_index.dir = tmp_path / "suppliers"
+    try:
+        response = client.put("/api/suppliers/settings", json={"autocrawl_pages": 120})
+        assert response.status_code == 200 and response.json()["autocrawl_pages"] == 120
+        assert client.put("/api/suppliers/settings", json={"autocrawl_pages": -1}).status_code == 422
+        info = client.get("/api/suppliers").json()
+        assert info["autocrawl_pages"] == 120 and "search_engine" in info
+        assert json.loads((tmp_path / "suppliers" / "index.json").read_text(encoding="utf-8"))["autocrawl_pages"] == 120
+        assert internet_prices.provider is not None and internet_prices.provider.name in ("auto", "suppliers", "fake", "claude-web-search")
+    finally:
+        supplier_index.dir, supplier_index.autocrawl_pages = saved

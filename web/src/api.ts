@@ -231,6 +231,12 @@ export interface Supplier {
   progress: string
   error: string
   max_pages: number
+  /** Найден автопоиском, а не заведён оператором. */
+  discovered: boolean
+  /** По какому запросу нашёлся. */
+  query: string
+  /** Каталог обходили целиком (а не только страницы из поиска). */
+  crawled: boolean
 }
 
 export interface SupplierOffer {
@@ -247,6 +253,11 @@ export interface SupplierIndexInfo {
   suppliers: Supplier[]
   offers: number
   updated_at: string
+  /** Сколько страниц обходить у сайтов, найденных автопоиском; 0 — не обходить. */
+  autocrawl_pages: number
+  queued: number
+  /** Чем ищем в интернете; пусто — автопоиск выключен. */
+  search_engine: string
 }
 
 export interface Health {
@@ -349,6 +360,12 @@ export function uploadSupplierPriceList(id: string, file: File): Promise<Supplie
   const form = new FormData()
   form.append('file', file)
   return fetch(`${SUPPLIERS}/${encodeURIComponent(id)}/pricelist`, { method: 'POST', body: form }).then((r) => readData<Supplier>(r))
+}
+
+export function updateSupplierSettings(body: { autocrawl_pages: number }): Promise<SupplierIndexInfo> {
+  return fetch(`${SUPPLIERS}/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) =>
+    readData<SupplierIndexInfo>(r),
+  )
 }
 
 export function sampleSupplierOffers(id: string): Promise<SupplierOffer[]> {

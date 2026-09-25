@@ -113,6 +113,12 @@ public sealed class PythonPricingClient(HttpClient http) : IPricingEngine
         return body?.Offers ?? [];
     }
 
+    public async Task<SupplierIndexInfo> UpdateSupplierSettingsAsync(SupplierSettings settings, CancellationToken ct)
+    {
+        using var response = await SendAsync(() => http.PutAsJsonAsync("/api/suppliers/settings", settings, Json, ct), ct);
+        return await response.Content.ReadFromJsonAsync<SupplierIndexInfo>(Json, ct) ?? new SupplierIndexInfo();
+    }
+
     private static async Task<Supplier> ReadSupplierAsync(HttpResponseMessage response, CancellationToken ct)
     {
         return await response.Content.ReadFromJsonAsync<Supplier>(Json, ct)

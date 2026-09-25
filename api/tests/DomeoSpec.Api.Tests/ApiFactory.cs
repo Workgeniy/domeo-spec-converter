@@ -79,9 +79,23 @@ public sealed class FakePricing : IPricingEngine
     }
 
     public List<Supplier> Suppliers { get; } = [];
+    public int AutocrawlPages { get; set; } = 300;
 
     public Task<SupplierIndexInfo> GetSuppliersAsync(CancellationToken ct) =>
-        Task.FromResult(new SupplierIndexInfo { Suppliers = Suppliers.ToList(), Offers = Suppliers.Sum(s => s.Offers), UpdatedAt = Suppliers.Count > 0 ? "2026-09-25" : "" });
+        Task.FromResult(new SupplierIndexInfo
+        {
+            Suppliers = Suppliers.ToList(),
+            Offers = Suppliers.Sum(s => s.Offers),
+            UpdatedAt = Suppliers.Count > 0 ? "2026-09-25" : "",
+            AutocrawlPages = AutocrawlPages,
+            SearchEngine = "fake-search",
+        });
+
+    public Task<SupplierIndexInfo> UpdateSupplierSettingsAsync(SupplierSettings settings, CancellationToken ct)
+    {
+        AutocrawlPages = settings.AutocrawlPages;
+        return GetSuppliersAsync(ct);
+    }
 
     public Task<Supplier> AddSupplierAsync(SupplierCreate supplier, CancellationToken ct)
     {

@@ -251,10 +251,48 @@ class SupplierIndexProvider:
         return self.index.lookup(name, description, unit, today)
 
 
+class AutoSearchProvider:
+    """Индекс поставщиков плюс автопоиск: если в индексе нет точного совпадения, позиция
+    ищется в интернете, найденные магазины и цены пополняют индекс, и ответ берётся уже
+    из него. Бесплатно: поисковик без ключа, страницы читаются по разметке."""
+
+    name = "auto"
+    cacheable = False  # кэш есть у самого веб-поиска (по запросу), индекс — локальный
+
+    def __init__(self, index, web=None):  # SupplierIndex, WebPriceSearch | None
+        self.index = index
+        self.web = web
+
+    @property
+    def model(self) -> str:
+        engine = f"автопоиск через {self.web.engine.name}" if self.web is not None else "автопоиск выключен"
+        return f"{self.index.description}; {engine}"
+
+    def lookup(self, name: str, description: str, unit: str, today: str) -> InternetLookup:
+        base = self.index.lookup(name, description, unit, today)
+        base.provider = self.name
+        if base.status == "found" and base.price is not None:
+            return base  # в индексе уже есть та же позиция
+        if self.web is None:
+            return base
+        try:
+            pages = self.web.find(name, description, unit, today)
+        except Exception as exc:  # noqa: BLE001 — сбой поисковика не должен ронять пачку
+            base.comment = f"{base.comment}; автопоиск не ответил: {str(exc)[:120]}".strip("; ")
+            return base
+        if not any(page.offers for page in pages):
+            base.comment = f"{base.comment}; автопоиск в интернете цен не нашёл".strip("; ")
+            return base
+        result = self.index.lookup(name, description, unit, today)  # индекс уже пополнен найденным
+        result.provider = self.name
+        return result
+
+
 class InternetPriceService:
     """Поиск цен пачками с кэшем на диске. Провайдер выбирается переменной
-    PRICE_SEARCH_PROVIDER: claude (нужен ключ), suppliers (индекс каталогов поставщиков),
-    fake (заглушка); без неё — claude при наличии ключа, иначе suppliers."""
+    PRICE_SEARCH_PROVIDER: claude (нужен ключ), auto (индекс поставщиков + бесплатный
+    автопоиск), suppliers (только индекс), fake (заглушка); без неё — claude при наличии
+    ключа, иначе auto."""
 
     def __init__(
         self,
@@ -270,9 +308,10 @@ class InternetPriceService:
         self.concurrency = max(1, concurrency)
         self._cache: dict[str, InternetLookup] = {}
         self._lock = threading.Lock()
+        self._save_lock = threading.Lock()
 
     @classmethod
-    def from_env(cls, supplier_index=None) -> InternetPriceService:
+    def from_env(cls, supplier_index=None, web_search=None) -> InternetPriceService:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
         choice = os.environ.get("PRICE_SEARCH_PROVIDER", "").strip().lower()
         provider: PriceSearchProvider | None = None
@@ -280,6 +319,8 @@ class InternetPriceService:
             provider = FakePriceProvider()
         elif choice == "suppliers" and supplier_index is not None:
             provider = SupplierIndexProvider(supplier_index)
+        elif choice == "auto" and supplier_index is not None:
+            provider = AutoSearchProvider(supplier_index, web_search)
         elif choice in ("", "claude") and api_key:
             provider = ClaudeWebSearchProvider(
                 api_key=api_key,
@@ -288,7 +329,7 @@ class InternetPriceService:
                 max_searches=int(os.environ.get("PRICE_SEARCH_MAX_SEARCHES", DEFAULT_MAX_SEARCHES)),
             )
         elif choice == "" and supplier_index is not None:
-            provider = SupplierIndexProvider(supplier_index)
+            provider = AutoSearchProvider(supplier_index, web_search)
         return cls(
             provider,
             ttl_days=int(os.environ.get("INTERNET_PRICE_TTL_DAYS", DEFAULT_TTL_DAYS)),
@@ -316,12 +357,13 @@ class InternetPriceService:
             self._cache = {key: InternetLookup.model_validate(value) for key, value in raw.get("lookups", {}).items()}
 
     def save(self) -> None:
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        with self._lock:
-            payload = {"lookups": {key: value.model_dump() for key, value in self._cache.items()}}
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(self.path)
+        with self._save_lock:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            with self._lock:
+                payload = {"lookups": {key: value.model_dump() for key, value in self._cache.items()}}
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(self.path)
 
     @staticmethod
     def cache_key(name: str, description: str) -> str:

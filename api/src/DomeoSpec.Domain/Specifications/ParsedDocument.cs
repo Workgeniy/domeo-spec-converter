@@ -136,6 +136,12 @@ public sealed record Supplier
     public string Progress { get; init; } = "";
     public string Error { get; init; } = "";
     public int MaxPages { get; init; } = 3000;
+    /// <summary>Найден автопоиском, а не заведён оператором.</summary>
+    public bool Discovered { get; init; }
+    /// <summary>По какому запросу нашёлся.</summary>
+    public string Query { get; init; } = "";
+    /// <summary>Каталог обходили целиком (а не только страницы из поиска).</summary>
+    public bool Crawled { get; init; }
 }
 
 /// <summary>Одна позиция каталога поставщика.</summary>
@@ -157,7 +163,14 @@ public sealed record SupplierIndexInfo
     public IReadOnlyList<Supplier> Suppliers { get; init; } = [];
     public int Offers { get; init; }
     public string UpdatedAt { get; init; } = "";
+    /// <summary>Сколько страниц обходить у сайтов, найденных автопоиском; 0 — не обходить.</summary>
+    public int AutocrawlPages { get; init; } = 300;
+    public int Queued { get; init; }
+    /// <summary>Чем ищем в интернете; пусто — автопоиск выключен.</summary>
+    public string SearchEngine { get; init; } = "";
 }
+
+public sealed record SupplierSettings(int AutocrawlPages);
 
 /// <summary>
 /// Параметры КП — приложений к договору по образцу заказчика. Правила цены применяются поверх

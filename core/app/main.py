@@ -31,12 +31,15 @@ from .models import (
     SupplierCreate,
     SupplierIndexInfo,
     SupplierSample,
+    SupplierSettings,
 )
 from .parsing.ocr import default_provider
 from .parsing.spec_parser import parse_pdf
 from .pricing.internet import InternetPriceService
 from .pricing.store import PriceListStore
+from .pricing.suppliers.discovery import WebPriceSearch
 from .pricing.suppliers.index import SupplierIndex
+from .pricing.websearch import engine_from_env
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 MAX_INTERNET_ITEMS = 50  # поиск — долгий (десятки секунд на позицию), фронт шлёт пачками
@@ -44,14 +47,19 @@ MAX_INTERNET_ITEMS = 50  # поиск — долгий (десятки секу�
 load_env_file()  # ключи для локального запуска — из core/.env, если он есть
 price_lists = PriceListStore()
 supplier_index = SupplierIndex()
-internet_prices = InternetPriceService.from_env(supplier_index)
+search_engine = engine_from_env()
+web_search = WebPriceSearch(search_engine, supplier_index) if search_engine is not None else None
+supplier_index.search_engine = search_engine.name if search_engine is not None else ""
+internet_prices = InternetPriceService.from_env(supplier_index, web_search)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Прайс закупки, индекс поставщиков и кэш интернет-цен, накопленные раньше, подхватываются при старте.
+    # Прайс закупки, индекс поставщиков и кэши, накопленные раньше, подхватываются при старте.
     price_lists.load()
     supplier_index.load()
+    if web_search is not None:
+        web_search.load()
     internet_prices.load()
     yield
 
@@ -84,6 +92,12 @@ def _supplier_or_404(supplier_id: str) -> Supplier:
 @app.get("/api/suppliers", response_model=SupplierIndexInfo)
 def suppliers_info() -> SupplierIndexInfo:
     return supplier_index.info()
+
+
+@app.put("/api/suppliers/settings", response_model=SupplierIndexInfo)
+def suppliers_settings(body: SupplierSettings) -> SupplierIndexInfo:
+    """Сколько страниц обходить у сайтов, найденных автопоиском (0 — не обходить)."""
+    return supplier_index.set_settings(body.autocrawl_pages)
 
 
 @app.post("/api/suppliers", response_model=Supplier)

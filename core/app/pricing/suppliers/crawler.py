@@ -27,6 +27,7 @@ SITEMAP_CANDIDATES = ("/sitemap.xml", "/sitemap_index.xml", "/sitemap-index.xml"
 MAX_SITEMAPS = 60
 MAX_SITEMAP_URLS = 40_000
 MAX_BODY = 3 * 1024 * 1024
+NO_PRICE_PAGE_LIMIT = 60  # столько страниц без единой цены — на сайте нет разметки, дальше не тратим лимит
 PRODUCT_HINT = re.compile(r"/(product|products|tovar|tovary|item|items|goods|catalog|katalog|shop|magazin)/", re.I)
 SKIP_HINT = re.compile(r"/(news|novosti|blog|articles|stati|about|contacts|kontakty|delivery|dostavka|oplata|payment|policy|privacy|search|login|cart|basket|compare|wishlist|auth|personal)/|\.(jpg|jpeg|png|gif|webp|svg|pdf|zip|rar|doc|docx|xls|xlsx|css|js)$", re.I)
 
@@ -181,6 +182,8 @@ class SiteCrawler:
                 offers.extend(extract_offers(response.text, str(response.url)))
             if pages % 20 == 0:
                 self.progress(f"страниц {pages} из {total}, цен {len(offers)}")
+            if pages >= NO_PRICE_PAGE_LIMIT and not offers:
+                break
         self.progress(f"страниц {pages} из {total}, цен {len(offers)}")
         return offers, pages
 
@@ -215,5 +218,7 @@ class SiteCrawler:
                     queue.append(target)
             if pages % 20 == 0:
                 self.progress(f"страниц {pages}, цен {len(offers)}")
+            if pages >= NO_PRICE_PAGE_LIMIT and not offers:
+                break
         self.progress(f"страниц {pages}, цен {len(offers)}")
         return offers, pages
