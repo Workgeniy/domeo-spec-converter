@@ -62,8 +62,31 @@ def _client(requests: list[str]) -> httpx.Client:
     return httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
 
 
+class ParamAwareEngine(FakeEngine):
+    """Запрос с размерами ничего не находит, без них — обычная выдача."""
+
+    def search(self, query: str, max_results: int = 8) -> list[SearchHit]:
+        if "x" in query:
+            self.queries.append(query)
+            return []
+        return super().search(query, max_results)
+
+
+def test_query_with_parameters_falls_back_to_plain(tmp_path: Path) -> None:
+    index = SupplierIndex(data_dir=tmp_path)
+    index.set_settings(autocrawl_pages=0)
+    engine = ParamAwareEngine()
+    web = WebPriceSearch(engine, index, data_dir=tmp_path, client=_client([]), page_delay=0)
+    pages = web.find("Стул детский регулируемый по высоте №1-№3", "Стул детский, 350х340х260/300/340(h)", "шт.", "2026-09-25")
+    assert engine.queries[0] == "Стул детский регулируемый по высоте №1-№3 350x340x260 купить"
+    assert engine.queries[1] == "Стул детский регулируемый по высоте №1-№3 купить"
+    assert [p.host for p in pages if p.offers] == ["mebel-sad.test", "parta-plus.test"]
+    assert web.cached_queries == 2  # обе попытки запомнены, повтор их не тронет
+
+
 def test_helpers() -> None:
     assert build_query("  Стул   детский ") == "Стул детский купить"
+    assert build_query("Стеллаж с перфорированными полками", "Стеллаж, 2000х1000х400(h), 4 полки") == "Стеллаж с перфорированными полками 2000x1000x400 купить"
     assert is_shop_candidate("https://mebel-sad.test/catalog/1") and not is_shop_candidate("https://www.ozon.ru/x") and not is_shop_candidate("https://a.test/f.pdf")
     assert site_name_of(PRODUCT) == "Мебель-Сад" and site_name_of(PRODUCT2) == "Парта-Плюс" and site_name_of("<html><title>Просто</title></html>") == ""
     # Хвост заголовка-слогана — не имя магазина: возьмут хост.

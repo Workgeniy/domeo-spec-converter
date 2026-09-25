@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 from ...models import InternetLookup, InternetOffer, Supplier, SupplierIndexInfo, SupplierOffer
 from ..history import normalize_name, tokens
+from ..params import Params, compare_params, extract_params
 from .crawler import SiteCrawler, normalize_site
 from .extract import Extracted
 from .xlsx_import import read_price_list
@@ -45,14 +46,25 @@ def _host(site: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+PARAM_MATCH_BONUS = 0.1
+PARAM_CONFLICT_FACTOR = 0.75
+NOTE_PARAMS_MATCH = "параметры совпали"
+NOTE_PARAMS_CONFLICT = "параметры не совпали"
+NOTE_PARAMS_UNKNOWN = "параметры не указаны"
+
+Ranked = tuple[SupplierOffer, float, str]  # предложение, совпадение, пометка о параметрах
+
+
 class OfferMatcher:
-    """Индекс слово → предложения; оценка та же, что у сопоставления с историей."""
+    """Индекс слово → предложения; оценка по словам та же, что у сопоставления с историей,
+    плюс проверка числовых параметров (габариты, объём, масса…) из характеристик позиции."""
 
     def __init__(self, offers: list[SupplierOffer] | None = None):
         self.offers: list[SupplierOffer] = []
         self.index: dict[str, set[int]] = defaultdict(set)
         self.offer_tokens: list[set[str]] = []
         self.offer_keys: list[str] = []
+        self.offer_params: list[Params] = []
         self.add(offers or [])
 
     def add(self, offers: list[SupplierOffer]) -> None:
@@ -62,20 +74,41 @@ class OfferMatcher:
             toks = tokens(offer.name)
             self.offer_tokens.append(toks)
             self.offer_keys.append(normalize_name(offer.name))
+            self.offer_params.append(extract_params(offer.name))
             for t in toks:
                 self.index[t].add(i)
 
-    def search(self, name: str) -> list[tuple[SupplierOffer, float]]:
+    def search(self, name: str, description: str = "") -> list[Ranked]:
         key = normalize_name(name)
         query = tokens(name)
         if not query:
             return []
-        scored: dict[int, float] = {}
+        spec = extract_params(f"{name} {description}")
+        ranked: list[Ranked] = []
+        seen: set[int] = set()
         for t in query:
             for i in self.index.get(t, ()):
-                if i not in scored:
-                    scored[i] = self._score(key, query, i)
-        return sorted(((self.offers[i], s) for i, s in scored.items() if s >= ANALOG_THRESHOLD), key=lambda pair: (-pair[1], pair[0].price))
+                if i in seen:
+                    continue
+                seen.add(i)
+                score = self._score(key, query, i)
+                note = ""
+                if not spec.empty():
+                    matches, conflicts = compare_params(spec, self.offer_params[i])
+                    if conflicts:
+                        # Другой размер/объём — это не та же позиция: не выше «похожего», в цену не входит.
+                        score = min(round(score * PARAM_CONFLICT_FACTOR, 3), MATCH_THRESHOLD - 0.01)
+                        note = NOTE_PARAMS_CONFLICT
+                    elif matches:
+                        score = min(1.0, round(score + PARAM_MATCH_BONUS, 3))
+                        note = NOTE_PARAMS_MATCH
+                    else:
+                        note = NOTE_PARAMS_UNKNOWN
+                if score >= ANALOG_THRESHOLD:
+                    ranked.append((self.offers[i], score, note))
+        # При равном совпадении вперёд идут предложения с подтверждёнными параметрами, потом без указанных.
+        order = {NOTE_PARAMS_MATCH: 0, "": 1, NOTE_PARAMS_UNKNOWN: 1, NOTE_PARAMS_CONFLICT: 2}
+        return sorted(ranked, key=lambda item: (-item[1], order[item[2]], item[0].price))
 
     def _score(self, key: str, query: set[str], i: int) -> float:
         candidate = self.offer_tokens[i]
@@ -407,21 +440,24 @@ class SupplierIndex:
             total = sum(len(o) for o in self.offers.values())
             return f"каталоги поставщиков: {total} позиций у {len(self.suppliers)} поставщиков"
 
-    def rank(self, name: str) -> list[tuple[SupplierOffer, float]]:
-        """Предложения индекса по убыванию совпадения (не ниже порога «похоже»)."""
+    def rank(self, name: str, description: str = "") -> list[Ranked]:
+        """Предложения индекса по убыванию совпадения (не ниже порога «похоже»); параметры из
+        характеристик подтверждают или отводят совпадение."""
         with self._lock:
-            return self._matcher.search(name)
+            return self._matcher.search(name, description)
 
     @staticmethod
-    def matched_shops(ranked: list[tuple[SupplierOffer, float]]) -> int:
+    def matched_shops(ranked: list[Ranked]) -> int:
         """Сколько разных магазинов дали ту же позицию (совпадение не ниже MATCH_THRESHOLD)."""
-        return len({offer.supplier_id for offer, score in ranked if score >= MATCH_THRESHOLD})
+        return len({offer.supplier_id for offer, score, _ in ranked if score >= MATCH_THRESHOLD})
 
     def lookup(self, name: str, description: str, unit: str, today: str) -> InternetLookup:
-        return self.build_lookup(self.rank(name), name, description, today)
+        return self.build_lookup(self.rank(name, description), name, description, today)
 
-    def build_lookup(self, ranked: list[tuple[SupplierOffer, float]], name: str, description: str, today: str) -> InternetLookup:
+    def build_lookup(self, ranked: list[Ranked], name: str, description: str, today: str) -> InternetLookup:
         query = re.sub(r"\s+", " ", f"{name} {description}".strip())[:300]
+        spec = extract_params(f"{name} {description}")
+        params_text = f"параметры {spec.describe()}" if not spec.empty() else ""
         if not ranked:
             return InternetLookup(status="not_found", query=query, looked_up_at=today, provider="suppliers", comment="в каталогах поставщиков похожих позиций нет")
         shown = ranked[:OFFERS_SHOWN]
@@ -432,19 +468,34 @@ class SupplierIndex:
                 shop=offer.supplier,
                 price=offer.price,
                 analog=score < MATCH_THRESHOLD,
-                note=f"совпадение {round(score * 100)}%" + (f", арт. {offer.sku}" if offer.sku else "") + (f", цена от {offer.collected_at}" if offer.collected_at else ""),
+                note=", ".join(
+                    part
+                    for part in (
+                        f"совпадение {round(score * 100)}%",
+                        note,
+                        f"арт. {offer.sku}" if offer.sku else "",
+                        f"цена от {offer.collected_at}" if offer.collected_at else "",
+                    )
+                    if part
+                ),
             )
-            for offer, score in shown
+            for offer, score, note in shown
         ]
-        matched = [offer.price for offer, score in ranked if score >= MATCH_THRESHOLD]
+        matched = [offer.price for offer, score, _ in ranked if score >= MATCH_THRESHOLD]
         if matched:
             price = float(statistics.median(matched))
-            suppliers = len({offer.supplier for offer, score in ranked if score >= MATCH_THRESHOLD})
+            suppliers = len({offer.supplier for offer, score, _ in ranked if score >= MATCH_THRESHOLD})
             low, high = (f"{value:,.0f}".replace(",", " ") for value in (min(matched), max(matched)))
             comment = f"совпадений {len(matched)} у {suppliers} поставщ., от {low} до {high} ₽; взята медиана"
+            if params_text and all(note == NOTE_PARAMS_UNKNOWN for _, score, note in ranked if score >= MATCH_THRESHOLD):
+                comment += "; в предложениях параметры не указаны — проверьте размер"
         else:
             price = None
             comment = "точных совпадений нет, показаны похожие позиции — цену выбирает оператор"
+            if params_text and any(note == NOTE_PARAMS_CONFLICT for _, _, note in ranked):
+                comment = "по словам похоже, но параметры другие — цену выбирает оператор"
+        if params_text:
+            comment = f"{params_text}; {comment}"
         return InternetLookup(status="found", query=query, looked_up_at=today, offers=offers, price=price, comment=comment, provider="suppliers")
 
 

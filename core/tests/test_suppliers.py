@@ -199,6 +199,40 @@ def test_index_crawl_lookup_and_persistence(tmp_path: Path) -> None:
     assert reloaded.info().offers == 0 and not (tmp_path / "suppliers" / "offers" / f"{a.id}.json").exists()
 
 
+def test_parameters_separate_sizes(tmp_path: Path) -> None:
+    index = SupplierIndex(data_dir=tmp_path)
+    shop = index.add("Металл-Пром", "metprommebel.ru")
+    index.set_offers(
+        shop.id,
+        [
+            Extracted(name="Стеллаж 2000x1000x400 с 4 перфорированными полками", price=10180, url="https://metprommebel.ru/1"),
+            Extracted(name="Стеллаж 2500x1000x400 с 4 перфорированными полками", price=10764, url="https://metprommebel.ru/2"),
+            Extracted(name="Стеллаж 2000x1000x500 с 4 перфорированными полками", price=11992, url="https://metprommebel.ru/3"),
+            Extracted(name="Стеллаж с перфорированными полками, 4 полки", price=9000, url="https://metprommebel.ru/4"),  # размер не указан
+        ],
+        "карта сайта",
+    )
+    # Без характеристик все четыре — та же позиция, медиана по всем.
+    plain = index.lookup("Стеллаж с перфорированными полками тип 2", "", "шт.", "2026-09-25")
+    assert [o.analog for o in plain.offers] == [False] * 4 and plain.price == (10180 + 10764) / 2
+    # С размером в характеристиках: другой размер — «похоже», в цену не входит.
+    sized = index.lookup("Стеллаж с перфорированными полками тип 2", "Стеллаж металлический, 4 полки, 2000х1000х400(h)", "шт.", "2026-09-25")
+    by_title = {o.title: o for o in sized.offers}
+    assert not by_title["Стеллаж 2000x1000x400 с 4 перфорированными полками"].analog and "параметры совпали" in by_title["Стеллаж 2000x1000x400 с 4 перфорированными полками"].note
+    assert by_title["Стеллаж 2500x1000x400 с 4 перфорированными полками"].analog and "параметры не совпали" in by_title["Стеллаж 2500x1000x400 с 4 перфорированными полками"].note
+    assert by_title["Стеллаж 2000x1000x500 с 4 перфорированными полками"].analog
+    assert not by_title["Стеллаж с перфорированными полками, 4 полки"].analog and "параметры не указаны" in by_title["Стеллаж с перфорированными полками, 4 полки"].note
+    assert sized.price == (9000 + 10180) / 2 and sized.comment.startswith("параметры 2000x1000x400;")
+    assert sized.offers[0].title.startswith("Стеллаж 2000x1000x400")  # совпавший размер — первым
+    # Только чужие размеры: цены нет, оператору честно сказано почему.
+    other = index.lookup("Стеллаж 2500x1000x400", "2500х1000х400(h)", "шт.", "2026-09-25")
+    assert other.price is not None  # 2500-й совпал по словам и по размеру
+    # Размер, которого нет ни у кого: в цену попадает только предложение без размера, с просьбой проверить.
+    unknown = index.lookup("Стеллаж с перфорированными полками", "3000х1200х600(h)", "шт.", "2026-09-25")
+    assert unknown.status == "found" and unknown.price == 9000 and "параметры не указаны" in unknown.offers[0].note
+    assert "проверьте размер" in unknown.comment and [o.analog for o in unknown.offers[1:]] == [True, True, True]
+
+
 def test_supplier_endpoints_and_lookup(tmp_path: Path) -> None:
     saved = (supplier_index.dir, dict(supplier_index.suppliers), dict(supplier_index.offers), internet_prices.provider)
     supplier_index.dir = tmp_path / "suppliers"

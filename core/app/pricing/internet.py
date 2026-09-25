@@ -271,7 +271,7 @@ class AutoSearchProvider:
         return f"{self.index.description}; {engine}"
 
     def lookup(self, name: str, description: str, unit: str, today: str) -> InternetLookup:
-        ranked = self.index.rank(name)
+        ranked = self.index.rank(name, description)
         base = self.index.build_lookup(ranked, name, description, today)
         base.provider = self.name
         shops_before = self.index.matched_shops(ranked)
@@ -282,7 +282,7 @@ class AutoSearchProvider:
         except Exception as exc:  # noqa: BLE001 — сбой поисковика не должен ронять пачку
             base.comment = f"{base.comment}; автопоиск не ответил: {str(exc)[:120]}".strip("; ")
             return base
-        ranked = self.index.rank(name)
+        ranked = self.index.rank(name, description)
         result = self.index.build_lookup(ranked, name, description, today)
         result.provider = self.name
         if self.index.matched_shops(ranked) <= shops_before:

@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 import httpx
 from bs4 import BeautifulSoup
 
+from ..params import extract_params
 from ..websearch import SearchEngine, SearchHit
 from .crawler import USER_AGENT
 from .extract import Extracted, extract_offers
@@ -48,10 +49,12 @@ class DiscoveredPage:
     offers: list[Extracted] = field(default_factory=list)
 
 
-def build_query(name: str) -> str:
-    """«Стул детский регулируемый по высоте №1-№3» → «Стул детский регулируемый по высоте №1-№3 купить»."""
+def build_query(name: str, description: str = "") -> str:
+    """«Стеллаж с перфорированными полками» + характеристики «…2000х1000х400(h)» →
+    «Стеллаж с перфорированными полками 2000x1000x400 купить»; без параметров — просто название."""
     text = re.sub(r"\s+", " ", name).strip()
-    return f"{text} купить"[:200]
+    params = extract_params(description).describe()
+    return " ".join(part for part in (text, params, "купить") if part)[:200]
 
 
 def host_of(url: str) -> str:
@@ -150,21 +153,34 @@ class WebPriceSearch:
     # ---------- поиск ----------
 
     def find(self, name: str, description: str, unit: str, today: str) -> list[DiscoveredPage]:
-        """Страницы магазинов с предложениями по позиции; найденное сразу уходит в индекс."""
-        query = build_query(name)
-        pages = self._fresh(query, today)
-        if pages is None:
-            hits = self.engine.search(query, max_results=self.max_hits * 3)
-            pages = self._read_pages(hits)
-            with self._lock:
-                self._cache[query] = {
-                    "searched_at": today,
-                    "pages": [{"url": p.url, "host": p.host, "site_name": p.site_name, "offers": [o.__dict__ for o in p.offers]} for p in pages],
-                }
-            self.save()
+        """Страницы магазинов с предложениями по позиции; найденное сразу уходит в индекс.
+        Сначала запрос с параметрами из характеристик, если по нему цен нет — без них."""
+        queries = [build_query(name, description)]
+        plain = build_query(name)
+        if plain != queries[0]:
+            queries.append(plain)
+        pages: list[DiscoveredPage] = []
+        for query in queries:
+            pages = self._search(query, today)
+            if any(page.offers for page in pages):
+                break
         for page in pages:
             if page.offers:
                 self.index.discover(page.host, page.site_name, query, page.offers)
+        return pages
+
+    def _search(self, query: str, today: str) -> list[DiscoveredPage]:
+        pages = self._fresh(query, today)
+        if pages is not None:
+            return pages
+        hits = self.engine.search(query, max_results=self.max_hits * 3)
+        pages = self._read_pages(hits)
+        with self._lock:
+            self._cache[query] = {
+                "searched_at": today,
+                "pages": [{"url": p.url, "host": p.host, "site_name": p.site_name, "offers": [o.__dict__ for o in p.offers]} for p in pages],
+            }
+        self.save()
         return pages
 
     def _read_pages(self, hits: list[SearchHit]) -> list[DiscoveredPage]:
