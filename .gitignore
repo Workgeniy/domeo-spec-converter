@@ -35,5 +35,5 @@ Thumbs.db
 *.log
 
 # ---- стенд (deploy/) ----
-deploy/.htpasswd
+
 deploy/.env

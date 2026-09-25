@@ -5,8 +5,7 @@
 #   deploy/deploy.sh                # хост testvm (из ~/.ssh/config), каталог ~/domeo/spec, порт 8090
 #   DEPLOY_HOST=user@1.2.3.4 EDGE_PORT=8090 deploy/deploy.sh
 #
-# Первый выкат создаёт на ВМ .htpasswd со случайным паролем и печатает его ОДИН раз.
-# Сменить пароль: ssh testvm 'cd ~/domeo/spec && printf "domeo:%s\n" "$(openssl passwd -apr1)" > .htpasswd'
+# Стенд открыт без пароля (по решению заказчика); доступ ограничивается только security group.
 set -euo pipefail
 
 HOST="${DEPLOY_HOST:-testvm}"
@@ -31,19 +30,13 @@ ssh "$HOST" bash -s -- "$DIR" "$TAG" "$PORT" <<'REMOTE'
 set -euo pipefail
 DIR="$1"; TAG="$2"; PORT="$3"
 cd ~/"$DIR"
-if [ ! -f .htpasswd ]; then
-  PW="$(openssl rand -base64 15 | tr -d '/+=' | cut -c1-16)"
-  printf 'domeo:%s\n' "$(openssl passwd -apr1 "$PW")" > .htpasswd
-  chmod 644 .htpasswd
-  echo "Создан .htpasswd — логин: domeo, пароль: $PW  (показывается один раз, смените при желании)"
-fi
 printf 'TAG=%s\nEDGE_PORT=%s\n' "$TAG" "$PORT" > .env
 docker compose up -d --remove-orphans
 sleep 5
 docker compose ps
 # Старые образы прошлых выкатов — подчистить, чтобы диск не рос.
 docker image prune -f >/dev/null
-echo "проба: $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORT/edge-health) /edge-health, $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORT/api/health) /api/health (401 = auth работает)"
+echo "проба: $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORT/edge-health) /edge-health, $(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORT/api/health) /api/health"
 REMOTE
 
 echo "== готово: http://$(ssh "$HOST" 'curl -s -4 ifconfig.me 2>/dev/null || hostname -I | cut -d" " -f1'):$PORT"
