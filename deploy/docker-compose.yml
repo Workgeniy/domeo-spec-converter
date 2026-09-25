@@ -9,6 +9,11 @@ services:
     build:
       context: ../core
     restart: unless-stopped
+    environment:
+      # Прайс закупки (pricelist.json) живёт в томе — переживает пересборку образа.
+      DATA_DIR: /data
+    volumes:
+      - core_data:/data
     # Разбор 100-страничного тома — до ~500 МБ; ВМ на 4 ГБ делит память с соседями.
     mem_limit: 1200m
     logging:
@@ -44,3 +49,6 @@ services:
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  core_data:

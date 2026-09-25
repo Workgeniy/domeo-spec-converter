@@ -1,4 +1,5 @@
 using DomeoSpec.Application.Parsing;
+using DomeoSpec.Application.Pricing;
 using DomeoSpec.Infrastructure.Engine;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,6 +22,11 @@ public static class DependencyInjection
         }
 
         services.AddHttpClient<IParsingEngine, PythonEngineClient>(client =>
+        {
+            client.BaseAddress = baseUri;
+            client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds);
+        });
+        services.AddHttpClient<IPricingEngine, PythonPricingClient>(client =>
         {
             client.BaseAddress = baseUri;
             client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds);

@@ -158,7 +158,7 @@ export const SummaryRowView = memo(function SummaryRowView({ number, row, rowKey
           decimalScale={2}
           thousandSeparator=" "
           value={row.price ?? ''}
-          onChange={(v) => onChange(rowKey, { price: toNumber(v) })}
+          onChange={(v) => onChange(rowKey, { price: toNumber(v), price_source: toNumber(v) === null ? '' : 'manual' })}
           placeholder="—"
           disabled={excluded}
           styles={{ input: { textAlign: 'right' } }}

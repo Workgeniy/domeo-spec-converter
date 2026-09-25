@@ -34,6 +34,50 @@ class GroupQty(BaseModel):
     qty: float | None = None
 
 
+class HistoryCandidate(BaseModel):
+    """Позиция прайса закупки, похожая на позицию спецификации."""
+
+    key: str
+    name: str
+    group: str = ""
+    score: float = 0.0  # 1.0 — точное совпадение наименования
+    price_min: float | None = None
+    price_max: float | None = None
+    price_median: float | None = None
+    price_last: float | None = None
+    last_date: str | None = None
+    purchases: int = 0
+    descriptions: list[str] = Field(default_factory=list)
+
+
+class HistoryPurchase(BaseModel):
+    """Одна покупка из истории — чтобы оператор видел, откуда эталон."""
+
+    purchased_at: str | None = None
+    unit_price: float
+    qty: float
+    partner_item: str = ""
+    order: str = ""
+    outlier: bool = False
+
+
+MatchKind = Literal["exact", "fuzzy", "analog", "none"]
+
+
+class HistoryPrice(BaseModel):
+    """Результат сопоставления позиции с историей закупок."""
+
+    kind: MatchKind = "none"
+    best: HistoryCandidate | None = None
+    candidates: list[HistoryCandidate] = Field(default_factory=list)  # до 5 лучших, включая best
+    purchases: list[HistoryPurchase] = Field(default_factory=list)  # последние покупки best
+    matched_at: str = ""
+
+
+# Откуда взята базовая цена позиции: выбор оператора.
+PriceSource = Literal["", "manual", "history_min", "history_max", "history_median", "history_last", "internet"]
+
+
 class SummaryItem(BaseModel):
     """Позиция, сведённая по всему документу (одна строка на позицию)."""
 
@@ -47,7 +91,12 @@ class SummaryItem(BaseModel):
     qty: float | None = None
     section: str = ""  # «Раздел» в КП
     note: str = ""
-    price: float | None = None  # базовая цена за единицу с НДС — от менеджера или этапа цен
+    price: float | None = None  # базовая цена за единицу с НДС — выбранная оператором (см. price_source)
+    price_source: PriceSource = ""
+    history: HistoryPrice | None = None  # сопоставление с историей закупок
+    internet_price: float | None = None  # цена из интернета на дату (следующий шаг)
+    internet_source: str = ""
+    internet_date: str = ""
     # Подлежит монтажу/пусконаладке → лист «1» (Приложение №1.1, с графами СМР);
     # иначе инвентарь → лист «2» (Приложение №1.2).
     installation: bool = True
@@ -131,6 +180,9 @@ class KpSettings(BaseModel):
     round_to_ruble: bool = False  # цены в КП — до рубля, иначе до копейки
 
 
+ExportKind = Literal["working", "kp", "cost"]
+
+
 class ExportRequest(BaseModel):
     """Данные для формирования Excel. Фронт может прислать отредактированные строки,
     в том числе объединённые из нескольких томов одного объекта."""
@@ -143,4 +195,43 @@ class ExportRequest(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     pages: list[PageInfo] = Field(default_factory=list)
     documents: list[SourceDocument] = Field(default_factory=list)
-    kp: KpSettings | None = None  # без параметров — просто спецификация без листа «КП»
+    kp: KpSettings | None = None
+    # working — рабочая выгрузка; kp — приложения к договору; cost — себестоимость для Домео.
+    # Не задано: kp, если есть параметры КП, иначе working (совместимость со старыми клиентами).
+    kind: ExportKind | None = None
+
+    def resolved_kind(self) -> ExportKind:
+        if self.kind:
+            return self.kind
+        return "kp" if self.kp is not None else "working"
+
+
+# ---------- прайс закупки ----------
+
+
+class PriceListInfo(BaseModel):
+    """Сводка по загруженному прайсу закупки."""
+
+    source: str = ""
+    built_at: str = ""
+    rows_total: int = 0
+    entries: int = 0
+    with_two_or_more: int = 0
+    purchases: int = 0
+    outliers: int = 0
+    period_from: str | None = None
+    period_to: str | None = None
+
+
+class MatchRequestItem(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+
+
+class MatchRequest(BaseModel):
+    items: list[MatchRequestItem] = Field(default_factory=list)
+
+
+class MatchResponse(BaseModel):
+    matches: dict[str, HistoryPrice] = Field(default_factory=dict)  # id позиции → результат

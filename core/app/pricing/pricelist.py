@@ -160,16 +160,18 @@ def _unique(values) -> list[str]:
 def summary(price_list: PriceList) -> dict:
     """Короткая сводка для отчёта и интерфейса."""
     entries = price_list.entries
+    period_from = min((e.purchases[-1].purchased_at for e in entries if e.purchases and e.purchases[-1].purchased_at), default=None)
+    period_to = max((e.last_date for e in entries if e.last_date), default=None)
     return {
+        "source": price_list.source,
+        "built_at": price_list.built_at.isoformat() if price_list.built_at else "",
         "rows_total": price_list.rows_total,
         "entries": len(entries),
         "with_two_or_more": sum(1 for e in entries if e.count >= 2),
         "purchases": sum(e.count for e in entries),
         "outliers": sum(1 for e in entries for p in e.purchases if p.outlier),
-        "period": (
-            min((e.purchases[-1].purchased_at for e in entries if e.purchases and e.purchases[-1].purchased_at), default=None),
-            max((e.last_date for e in entries if e.last_date), default=None),
-        ),
+        "period_from": period_from.isoformat() if period_from else None,
+        "period_to": period_to.isoformat() if period_to else None,
     }
 
 

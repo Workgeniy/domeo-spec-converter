@@ -1,5 +1,6 @@
 using DomeoSpec.Application.Common;
 using DomeoSpec.Application.Parsing;
+using DomeoSpec.Application.Pricing;
 using DomeoSpec.Domain.Specifications;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -12,6 +13,7 @@ namespace DomeoSpec.Api.Tests;
 public sealed class ApiFactory : WebApplicationFactory<Program>
 {
     public FakeEngine Engine { get; } = new();
+    public FakePricing Pricing { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -21,7 +23,34 @@ public sealed class ApiFactory : WebApplicationFactory<Program>
         {
             services.RemoveAll<IParsingEngine>();
             services.AddSingleton<IParsingEngine>(Engine);
+            services.RemoveAll<IPricingEngine>();
+            services.AddSingleton<IPricingEngine>(Pricing);
         });
+    }
+}
+
+public sealed class FakePricing : IPricingEngine
+{
+    public PriceListInfo? Info { get; set; }
+    public IReadOnlyList<MatchRequestItem>? LastMatched { get; private set; }
+
+    public Task<PriceListInfo> UploadPriceListAsync(Stream xlsx, string fileName, CancellationToken ct)
+    {
+        Info = new PriceListInfo { Source = fileName, Entries = 3, RowsTotal = 8, PeriodFrom = "2023-02-10", PeriodTo = "2025-04-01" };
+        return Task.FromResult(Info);
+    }
+
+    public Task<PriceListInfo?> GetPriceListAsync(CancellationToken ct) => Task.FromResult(Info);
+
+    public Task<IReadOnlyDictionary<string, HistoryPrice>> MatchAsync(IReadOnlyList<MatchRequestItem> items, CancellationToken ct)
+    {
+        if (Info is null) throw new ValidationFailedException("Прайс закупки ещё не загружен.");
+        LastMatched = items;
+        var best = new HistoryCandidate { Key = "стул детский", Name = "Стул детский регулируемый", Score = 1.0, PriceMin = 950, PriceMax = 2600, PriceLast = 2600, Purchases = 19 };
+        IReadOnlyDictionary<string, HistoryPrice> result = items.ToDictionary(
+            i => i.Id,
+            i => i.Name.Contains("Стул") ? new HistoryPrice { Kind = "exact", Best = best, Candidates = [best] } : new HistoryPrice { Kind = "none" });
+        return Task.FromResult(result);
     }
 }
 

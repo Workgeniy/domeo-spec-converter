@@ -4,7 +4,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-import type { KpSettings, ParsedDocument, SummaryItem } from './api'
+import type { HistoryPrice, KpSettings, ParsedDocument, PriceSource, SummaryItem } from './api'
 import { DEFAULT_KP } from './kp'
 
 /** Строка свода с клиентскими пометками, которых нет в модели ядра. */
@@ -35,8 +35,27 @@ interface WorkspaceState {
   removeDocument: (id: string) => void
   updateRow: (key: RowKey, patch: Partial<SummaryRow>) => void
   updateRows: (keys: RowKey[], patch: Partial<SummaryRow>) => void
+  /** Результаты сопоставления: ключ строки (docId:index) → результат. */
+  applyMatches: (matches: Record<string, HistoryPrice>) => void
+  /** Взять в базовую цену эталон из истории у выбранных строк (где есть сопоставление). */
+  chooseHistoryPrice: (keys: RowKey[], which: HistoryChoice) => void
   setKp: (patch: Partial<KpSettings>) => void
   clear: () => void
+}
+
+export type HistoryChoice = 'min' | 'max' | 'median' | 'last'
+
+const CHOICE_SOURCE: Record<HistoryChoice, PriceSource> = {
+  min: 'history_min',
+  max: 'history_max',
+  median: 'history_median',
+  last: 'history_last',
+}
+
+function historyPrice(row: SummaryRow, which: HistoryChoice): number | null {
+  const best = row.history?.best
+  if (!best) return null
+  return { min: best.price_min, max: best.price_max, median: best.price_median, last: best.price_last }[which]
 }
 
 function newId(): string {
@@ -77,6 +96,36 @@ export const useWorkspace = create<WorkspaceState>()(
       removeDocument: (id) => set((s) => ({ documents: s.documents.filter((d) => d.id !== id) })),
       updateRow: (key, patch) => set((s) => ({ documents: patchRows(s.documents, [key], patch) })),
       updateRows: (keys, patch) => set((s) => ({ documents: patchRows(s.documents, keys, patch) })),
+      applyMatches: (matches) =>
+        set((s) => ({
+          documents: s.documents.map((d) => ({
+            ...d,
+            doc: {
+              ...d.doc,
+              summary: d.doc.summary.map((row, i) => {
+                const match = matches[`${d.id}:${i}`]
+                return match ? { ...row, history: match } : row
+              }),
+            },
+          })),
+        })),
+      chooseHistoryPrice: (keys, which) =>
+        set((s) => {
+          const wanted = new Set(keys.map(rowKey))
+          return {
+            documents: s.documents.map((d) => ({
+              ...d,
+              doc: {
+                ...d.doc,
+                summary: d.doc.summary.map((row, i) => {
+                  if (!wanted.has(`${d.id}:${i}`)) return row
+                  const price = historyPrice(row, which)
+                  return price === null ? row : { ...row, price, price_source: CHOICE_SOURCE[which] }
+                }),
+              },
+            })),
+          }
+        }),
       setKp: (patch) => set((s) => ({ kp: { ...s.kp, ...patch } })),
       // Правила расчёта и должности — свои у компании, они переживают смену объекта;
       // сбрасываются только данные конкретного объекта (договор).
@@ -84,9 +133,30 @@ export const useWorkspace = create<WorkspaceState>()(
     }),
     {
       name: 'domeo-spec-workspace',
-      version: 4,
+      version: 5,
       migrate: (persisted, version) => {
-        const state = persisted as Partial<WorkspaceState>
+        let state = persisted as Partial<WorkspaceState>
+        if (version < 5 && state.documents) {
+          // v5: у строк свода появились источник цены, сопоставление с историей и цена из интернета.
+          state = {
+            ...state,
+            documents: state.documents.map((d) => ({
+              ...d,
+              doc: {
+                ...d.doc,
+                summary: d.doc.summary.map((row) => ({
+                  price_source: row.price !== null && row.price !== undefined ? 'manual' : '',
+                  history: null,
+                  internet_price: null,
+                  internet_source: '',
+                  internet_date: '',
+                  installation: true,
+                  ...row,
+                })),
+              },
+            })),
+          }
+        }
         if (version < 4) {
           // До v4 параметры КП описывали титульный лист (номер, дата, стороны, условия), которого
           // больше нет; переносим только то, что осталось в форме приложений к договору.

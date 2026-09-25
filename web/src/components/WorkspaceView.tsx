@@ -3,11 +3,12 @@ import { notifications } from '@mantine/notifications'
 import { IconChevronDown, IconDownload, IconPlus, IconTrash, IconX } from '@tabler/icons-react'
 import { useMemo, useState } from 'react'
 
-import { exportExcel } from '../api'
+import { exportExcel, type ExportKind } from '../api'
 import { buildExportRequest, downloadBlob } from '../export'
 import { kpTotals } from '../kp'
 import { useWorkspace, type WorkspaceDocument } from '../store'
 import { CheckTable } from './CheckTable'
+import { CostPanel } from './CostPanel'
 import { DetailTable } from './DetailTable'
 import { formatMoney } from './format'
 import { KpPanel } from './KpPanel'
@@ -36,12 +37,12 @@ export function WorkspaceView() {
     return { items, positions: active.length, excluded: rows.length - active.length, priced: totals.priced, total: totals.total, warnings }
   }, [documents, kp])
 
-  // withKp: приложения к договору по образцу (листы «1» и «2»); иначе рабочая выгрузка
-  // (свод, по помещениям, проверка) — для себя, не для заказчика.
-  async function download(docs: WorkspaceDocument[], withKp = true) {
+  // kp — приложения к договору по образцу (листы «1» и «2»); cost — себестоимость для Домео;
+  // working — рабочая выгрузка (свод, по помещениям, проверка).
+  async function download(docs: WorkspaceDocument[], kind: ExportKind = 'kp') {
     setDownloading(true)
     try {
-      const { blob, fileName } = await exportExcel(buildExportRequest(title, docs, withKp ? kp : null))
+      const { blob, fileName } = await exportExcel(buildExportRequest(title, docs, kp, kind))
       downloadBlob(blob, fileName)
     } catch (e) {
       notifications.show({ color: 'red', title: 'Не удалось сформировать Excel', message: e instanceof Error ? e.message : String(e) })
@@ -133,7 +134,8 @@ export function WorkspaceView() {
                   </>
                 )}
                 <Menu.Divider />
-                <Menu.Item onClick={() => download(documents, false)}>Рабочая выгрузка (свод, по помещениям, проверка)</Menu.Item>
+                <Menu.Item onClick={() => download(documents, 'cost')}>Себестоимость для Домео (три цены, выбор)</Menu.Item>
+                <Menu.Item onClick={() => download(documents, 'working')}>Рабочая выгрузка (свод, по помещениям, проверка)</Menu.Item>
               </Menu.Dropdown>
             </Menu>
           </Group>
@@ -154,6 +156,7 @@ export function WorkspaceView() {
       <Tabs defaultValue="summary" keepMounted={false}>
         <Tabs.List>
           <Tabs.Tab value="summary">Свод для КП ({stats.positions})</Tabs.Tab>
+          <Tabs.Tab value="cost">Себестоимость</Tabs.Tab>
           <Tabs.Tab value="kp" fw={600}>
             Формирование КП
           </Tabs.Tab>
@@ -163,8 +166,11 @@ export function WorkspaceView() {
         <Tabs.Panel value="summary" pt="md">
           <SummaryTable />
         </Tabs.Panel>
+        <Tabs.Panel value="cost" pt="md">
+          <CostPanel onDownload={() => download(documents, 'cost')} downloading={downloading} />
+        </Tabs.Panel>
         <Tabs.Panel value="kp" pt="md">
-          <KpPanel onDownload={() => download(documents)} downloading={downloading} />
+          <KpPanel onDownload={() => download(documents, 'kp')} downloading={downloading} />
         </Tabs.Panel>
         <Tabs.Panel value="detail" pt="md">
           <DetailTable />

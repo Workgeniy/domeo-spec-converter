@@ -3,43 +3,13 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
-import openpyxl
 import pytest
 
 from app.pricing.history import normalize_name, read_history, tokens
 from app.pricing.matching import Matcher
-from app.pricing.pricelist import PriceList, build_from_file, build_price_list
+from app.pricing.pricelist import PriceList, build_from_file
 
-from .conftest import sample
-
-HEADER = [
-    "Номер строки", "Номенклатура", "Текстовое описание", "Количество", "Группа аналитического учета",
-    "Заказы на сборку", "Количество собрать", "Комплектующая номенклатура", "Количество комплектующих",
-    "ЗаказаноДокумент", "Номенклатура партнера", "ЗаказаноКоличество", "ЗаказаноСумма",
-]
-
-
-@pytest.fixture
-def history_xlsx(tmp_path: Path) -> Path:
-    rows = [
-        ["1", "Стул детский регулируемый", "Стул детский, фанера", "26", "Мебель", None, None, None, None, "Заказ поставщику БАУТ-000001 от 10.02.2023", "Стул «Малыш» гр.1-3", "26", "26000"],
-        ["1", "Стул детский регулируемый", "Стул детский, фанера", "10", "Мебель", None, None, None, None, "Заказ поставщику БАУТ-000002 от 15.06.2024", "Стул «Малыш» гр.1-3", "10", "12000"],
-        ["1", "Стул детский регулируемый ", None, "5", "Мебель", None, None, None, None, "Заказ поставщику БАУТ-000003 от 01.03.2025", "Стул детский", "5", "7000"],
-        ["1", "стул детский регулируемый", None, "1", "Мебель", None, None, None, None, "Заказ поставщику БАУТ-000004 от 01.04.2025", "Стул детский", "1", "1"],  # артефакт: 1 ₽
-        ["2", "Набор волчков", "Набор из 6 волчков", "3", "Игры и игрушки", "Заказ на сборку БАУТ-000010 от 20.09.2024", "3", "Волчок фигурный", "18", "Заказ поставщику БАУТ-000005 от 20.09.2024", "Волчок (RNToys)", "18", "1800"],
-        ["2", "Набор волчков", "Набор из 6 волчков", "3", "Игры и игрушки", "Заказ на сборку БАУТ-000010 от 20.09.2024", "3", "Коробка", "3", "Заказ поставщику БАУТ-000005 от 20.09.2024", "Коробка картонная", "3", "300"],
-        ["3", "Шкаф холодильный среднетемпературный", "Шкаф 700 л", "1", "Торгово-технологическое оборудование", None, None, None, None, "Заказ поставщику БАУТ-000006 от 05.05.2025", "Polair CM107-S", "1", "85000"],
-        ["4", "Позиция без цены", None, "1", "Мебель", None, None, None, None, "Заказ поставщику БАУТ-000007 от 05.05.2025", None, None, None],
-    ]
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.append(HEADER)
-    for r in rows:
-        ws.append(r)
-    path = tmp_path / "история.xlsx"
-    wb.save(path)
-    return path
-
+from .conftest import sample  # noqa: F401 — history_xlsx приходит из conftest
 
 def test_normalize_and_tokens() -> None:
     assert normalize_name(" Стул  детский, регулируемый (гр. 1–3) ") == "стул детский регулируемый гр 1 3"

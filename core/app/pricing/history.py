@@ -86,27 +86,34 @@ def read_history(path: str | Path) -> list[PurchaseRow]:
         return row[i] if i is not None and i < len(row) else None
 
     result: list[PurchaseRow] = []
-    for row in rows:
-        name = str(cell(row, "name") or "").strip()
-        if not name:
-            continue
-        order = str(cell(row, "order") or "").strip()
-        result.append(
-            PurchaseRow(
-                name=name,
-                description=_clean(cell(row, "description")),
-                group=_clean(cell(row, "group")),
-                order=order,
-                order_date=_order_date(order),
-                partner_item=_clean(cell(row, "partner_item")),
-                qty=_number(cell(row, "qty")),
-                total=_number(cell(row, "total")),
-                assembly=_clean(cell(row, "assembly")),
-                assemble_qty=_number(cell(row, "assemble_qty")),
-                component=_clean(cell(row, "component")),
-            )
-        )
+    try:
+        for row in rows:
+            parsed = _parse_row(row, cell)
+            if parsed is not None:
+                result.append(parsed)
+    finally:
+        wb.close()  # read-only книга держит файл открытым, пока её не закроют
     return result
+
+
+def _parse_row(row: tuple, cell) -> PurchaseRow | None:
+    name = str(cell(row, "name") or "").strip()
+    if not name:
+        return None
+    order = str(cell(row, "order") or "").strip()
+    return PurchaseRow(
+        name=name,
+        description=_clean(cell(row, "description")),
+        group=_clean(cell(row, "group")),
+        order=order,
+        order_date=_order_date(order),
+        partner_item=_clean(cell(row, "partner_item")),
+        qty=_number(cell(row, "qty")),
+        total=_number(cell(row, "total")),
+        assembly=_clean(cell(row, "assembly")),
+        assemble_qty=_number(cell(row, "assemble_qty")),
+        component=_clean(cell(row, "component")),
+    )
 
 
 def _find_column(header: list[str], title: str) -> int | None:

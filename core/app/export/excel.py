@@ -106,18 +106,151 @@ DETAIL_COLUMNS = [
 
 def build_workbook(data: ExportRequest) -> Workbook:
     wb = Workbook()
+    kind = data.resolved_kind()
     # Сквозная нумерация по всему своду, как в образце (№ не начинается заново на листе «2»).
     numbered = list(enumerate(data.summary, start=1))
-    if data.kp is not None:
+    if kind == "kp" and data.kp is not None:
         mounted = [(n, s) for n, s in numbered if s.installation]
         inventory = [(n, s) for n, s in numbered if not s.installation]
         _fill_appendix(wb.active, data, mounted, data.kp, APPENDIX_1)
         _fill_appendix(wb.create_sheet(), data, inventory, data.kp, APPENDIX_2)
         return wb
+    if kind == "cost":
+        _fill_cost_sheet(wb.active, data, numbered)
+        _fill_history_sheet(wb.create_sheet("Покупки по истории"), numbered)
+        return wb
     _fill_appendix(wb.active, data, numbered, None, APPENDIX_1, sheet_title="Спецификация")
     _fill_detail_sheet(wb.create_sheet("По помещениям"), data.items)
     _fill_check_sheet(wb.create_sheet("Проверка"), data)
     return wb
+
+
+# ---------- себестоимость для Домео ----------
+
+COST_COLUMNS = [
+    ("№", 5.6),
+    ("Раздел", 26),
+    ("Наименование", 30),
+    ("Технические характеристики", 50),
+    ("Ед. изм.", 8),
+    ("Кол во", 9),
+    ("№ поз. в ТХ", 9),
+    ("Цена интернет на дату", 14),
+    ("Дата / источник", 16),
+    ("Цена минимальная по истории закупок", 15),
+    ("Цена максимальная по истории закупок", 15),
+    ("Последняя закупка", 13),
+    ("Дата последней", 12),
+    ("Сопоставление с историей", 34),
+    ("Выбранная цена, с НДС", 14),
+    ("Откуда", 13),
+    ("Стоимость, с НДС", 15),
+]
+PRICE_SOURCE_LABELS = {
+    "": "",
+    "manual": "вручную",
+    "history_min": "мин. история",
+    "history_max": "макс. история",
+    "history_median": "медиана история",
+    "history_last": "последняя закупка",
+    "internet": "интернет",
+}
+MATCH_KIND_LABELS = {"exact": "точно", "fuzzy": "похоже", "analog": "аналог", "none": "не найдено"}
+
+
+def _fill_cost_sheet(ws: Worksheet, data: ExportRequest, rows: list[tuple[int, SummaryItem]]) -> None:
+    """Файл себестоимости: три цены на позицию (интернет / мин / макс по истории) и выбор оператора."""
+    ws.title = "Себестоимость"
+    last_col = len(COST_COLUMNS)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
+    title = ws.cell(1, 1, f"Себестоимость: {data.title or data.doc_code}".strip(": "))
+    title.font = Font(name=FONT, size=12, bold=True)
+    ws.row_dimensions[1].height = 24
+    for idx, (label, width) in enumerate(COST_COLUMNS, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
+        cell = ws.cell(2, idx, label)
+        cell.font = Font(name=FONT, size=10, bold=True)
+        cell.border = BORDER
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.fill = FILL_SUPPLIER if 8 <= idx <= 13 else FILL_HEADER
+    ws.row_dimensions[2].height = 58
+
+    first = 3
+    r = first
+    for number, item in rows:
+        h = item.history
+        best = h.best if h else None
+        match_text = ""
+        if h and best:
+            match_text = f"{MATCH_KIND_LABELS.get(h.kind, h.kind)}: {best.name} ({best.purchases} закуп.)"
+        elif h:
+            match_text = MATCH_KIND_LABELS["none"]
+        values: list[object] = [
+            number,
+            item.section,
+            item.name,
+            item.description,
+            item.unit,
+            item.qty,
+            item.pos,
+            item.internet_price,
+            " ".join(p for p in (item.internet_date, item.internet_source) if p),
+            best.price_min if best else None,
+            best.price_max if best else None,
+            best.price_last if best else None,
+            best.last_date if best else None,
+            match_text,
+            item.price,
+            PRICE_SOURCE_LABELS.get(item.price_source, item.price_source),
+            f"=F{r}*O{r}",
+        ]
+        _write_values(ws, r, values, money=(6, 8, 10, 11, 12, 15, 17), percent=0, text=(2, 3, 4, 9, 14, 16))
+        if h and h.kind == "analog":
+            ws.cell(r, 14).font = Font(name=FONT, size=10, color="C00000")  # аналог — оператор должен проверить
+        ws.row_dimensions[r].height = _row_height([(item.description, COST_COLUMNS[3][1]), (match_text, COST_COLUMNS[13][1])])
+        r += 1
+    last = max(r - 1, first)
+    label = ws.cell(r, 16, "Итого, с НДС")
+    label.font = Font(name=FONT, size=10, bold=True)
+    total = ws.cell(r, 17, f"=SUM(Q{first}:Q{last})")
+    total.font = Font(name=FONT, size=10, bold=True)
+    total.number_format = MONEY
+    for col in (16, 17):
+        ws.cell(r, col).border = BORDER
+    r += 2
+    priced = sum(1 for _, s in rows if s.price is not None)
+    ws.cell(r, 1, f"Позиций: {len(rows)}; с выбранной ценой: {priced}; без цены: {len(rows) - priced}.").font = Font(name=FONT, size=10)
+    ws.auto_filter.ref = f"A2:{get_column_letter(last_col)}{last}"
+    ws.freeze_panes = "D3"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+
+
+HISTORY_COLUMNS = [("№", 5.6), ("№ поз. в ТХ", 10), ("Позиция", 34), ("Найдено в истории", 34), ("Дата", 11), ("Цена за ед.", 13), ("Кол-во", 8), ("Что купили", 44), ("Заказ", 30), ("Примечание", 12)]
+
+
+def _fill_history_sheet(ws: Worksheet, rows: list[tuple[int, SummaryItem]]) -> None:
+    """Последние покупки по каждой сопоставленной позиции — чтобы видеть, откуда эталоны."""
+    _write_header(ws, HISTORY_COLUMNS)
+    r = 2
+    for number, item in rows:
+        h = item.history
+        if not h or not h.best:
+            continue
+        for p in h.purchases:
+            values: list[object] = [number, item.pos, item.name, h.best.name, p.purchased_at, p.unit_price, p.qty, p.partner_item, p.order, "выброс" if p.outlier else ""]
+            for idx, value in enumerate(values, start=1):
+                cell = ws.cell(r, idx, value)
+                cell.font = Font(name=FONT, size=10, color="808080" if p.outlier else None)
+                cell.border = BORDER
+                cell.alignment = Alignment(horizontal="center" if idx in (1, 2, 5, 6, 7) else "left", vertical="center", wrap_text=True)
+                if idx == 6:
+                    cell.number_format = MONEY
+            r += 1
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(HISTORY_COLUMNS))}{max(r - 1, 2)}"
 
 
 # ---------- приложения к договору (листы «1» и «2») ----------

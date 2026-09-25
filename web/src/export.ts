@@ -1,24 +1,33 @@
-import type { KpSettings, ParsedDocument, SummaryItem } from './api'
+import type { ExportKind, KpSettings, ParsedDocument, SummaryItem } from './api'
 import type { SummaryRow, WorkspaceDocument } from './store'
 
 /** Строка свода без клиентских пометок — в том виде, в каком её понимает ядро. */
 function toSummaryItem(row: SummaryRow): SummaryItem {
   const { excluded: _excluded, ...item } = row
-  // Строки, разобранные до появления признака монтажа, считаются оборудованием (лист «1»).
-  return { ...item, installation: item.installation ?? true }
+  // Строки, разобранные до появления новых полей, получают значения по умолчанию.
+  return {
+    ...item,
+    installation: item.installation ?? true,
+    price_source: item.price_source ?? '',
+    history: item.history ?? null,
+    internet_price: item.internet_price ?? null,
+    internet_source: item.internet_source ?? '',
+    internet_date: item.internet_date ?? '',
+  }
 }
 
 /**
- * Документ для выгрузки: правки применены, исключённые строки убраны. С параметрами КП ядро
- * собирает приложения к договору (листы «1» и «2»), без них — рабочую выгрузку.
+ * Документ для выгрузки: правки применены, исключённые строки убраны. kp — приложения к договору
+ * по образцу (листы «1» и «2»), cost — себестоимость для Домео, working — рабочая выгрузка.
  * Несколько томов одного объекта склеиваются в один документ.
  */
-export function buildExportRequest(title: string, documents: WorkspaceDocument[], kp: KpSettings | null): ParsedDocument {
+export function buildExportRequest(title: string, documents: WorkspaceDocument[], kp: KpSettings, kind: ExportKind): ParsedDocument {
   const keep = (doc: WorkspaceDocument) => doc.doc.summary.filter((r) => !r.excluded).map(toSummaryItem)
+  const settings = kind === 'kp' ? kp : null
 
   if (documents.length === 1) {
     const d = documents[0].doc
-    return { ...d, title: title || d.title, summary: keep(documents[0]), kp }
+    return { ...d, title: title || d.title, summary: keep(documents[0]), kp: settings, kind }
   }
 
   const codes = documents.map((d) => d.doc.doc_code || d.doc.file_name)
@@ -33,7 +42,8 @@ export function buildExportRequest(title: string, documents: WorkspaceDocument[]
     summary: documents.flatMap(keep),
     warnings: [],
     documents: documents.flatMap((d) => d.doc.documents),
-    kp,
+    kp: settings,
+    kind,
   }
 }
 

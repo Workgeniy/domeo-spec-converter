@@ -16,8 +16,11 @@ RUN pip install -r requirements.txt
 
 COPY app ./app
 
-# Не root: сервису не нужны права на запись в образ.
-RUN useradd --system --uid 10001 --no-create-home app
+# Не root: сервису не нужны права на запись в образ. Единственное, что он пишет, —
+# прайс закупки в /data (том; владельца каталога Docker переносит на новый том).
+RUN useradd --system --uid 10001 --no-create-home app \
+    && mkdir -p /data && chown app:app /data
+ENV DATA_DIR=/data
 USER app
 
 EXPOSE 8000

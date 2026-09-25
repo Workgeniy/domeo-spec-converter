@@ -9,38 +9,15 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Literal
+from datetime import date
 
-from pydantic import BaseModel, Field
-
+from ..models import HistoryCandidate, HistoryPrice, HistoryPurchase, MatchKind
 from .history import normalize_name, tokens
 from .pricelist import PriceEntry, PriceList
 
-MatchKind = Literal["exact", "fuzzy", "analog", "none"]
-
 FUZZY_THRESHOLD = 0.6  # оценка, начиная с которой считаем, что это та же позиция
 ANALOG_THRESHOLD = 0.3  # ниже — не показываем даже как аналог
-
-
-class Candidate(BaseModel):
-    key: str
-    name: str
-    group: str = ""
-    score: float
-    price_min: float | None = None
-    price_max: float | None = None
-    price_median: float | None = None
-    price_last: float | None = None
-    last_date: str | None = None
-    purchases: int = 0
-    descriptions: list[str] = Field(default_factory=list)
-
-
-class Match(BaseModel):
-    query: str
-    kind: MatchKind
-    best: Candidate | None = None
-    candidates: list[Candidate] = Field(default_factory=list)  # до 5 лучших, включая best
+PURCHASES_SHOWN = 10  # сколько последних покупок лучшего кандидата отдаём оператору
 
 
 class Matcher:
@@ -54,11 +31,11 @@ class Matcher:
             for t in toks:
                 self.index[t].add(entry.key)
 
-    def match(self, name: str, description: str = "") -> Match:
+    def match(self, name: str, description: str = "") -> HistoryPrice:
         key = normalize_name(name)
         exact = self.by_key.get(key)
         if exact is not None:
-            return Match(query=name, kind="exact", best=_candidate(exact, 1.0), candidates=[_candidate(exact, 1.0)])
+            return self._result("exact", [(exact, 1.0)])
 
         query_tokens = tokens(name)
         scored: dict[str, float] = {}
@@ -66,13 +43,27 @@ class Matcher:
             for entry_key in self.index.get(t, ()):
                 if entry_key not in scored:
                     scored[entry_key] = self._score(key, query_tokens, entry_key)
-        ranked = sorted(scored.items(), key=lambda kv: kv[1], reverse=True)[:5]
-        candidates = [_candidate(self.by_key[k], s) for k, s in ranked if s >= ANALOG_THRESHOLD]
-        if not candidates:
-            return Match(query=name, kind="none")
-        best = candidates[0]
-        kind: MatchKind = "fuzzy" if best.score >= FUZZY_THRESHOLD else "analog"
-        return Match(query=name, kind=kind, best=best, candidates=candidates)
+        ranked = [(self.by_key[k], s) for k, s in sorted(scored.items(), key=lambda kv: kv[1], reverse=True)[:5] if s >= ANALOG_THRESHOLD]
+        if not ranked:
+            return HistoryPrice(kind="none", matched_at=date.today().isoformat())
+        kind: MatchKind = "fuzzy" if ranked[0][1] >= FUZZY_THRESHOLD else "analog"
+        return self._result(kind, ranked)
+
+    def _result(self, kind: MatchKind, ranked: list[tuple[PriceEntry, float]]) -> HistoryPrice:
+        candidates = [_candidate(entry, score) for entry, score in ranked]
+        best_entry = ranked[0][0]
+        purchases = [
+            HistoryPurchase(
+                purchased_at=p.purchased_at.isoformat() if p.purchased_at else None,
+                unit_price=p.unit_price,
+                qty=p.qty,
+                partner_item=p.partner_item,
+                order=p.order,
+                outlier=p.outlier,
+            )
+            for p in best_entry.purchases[:PURCHASES_SHOWN]
+        ]
+        return HistoryPrice(kind=kind, best=candidates[0], candidates=candidates, purchases=purchases, matched_at=date.today().isoformat())
 
     def _score(self, key: str, query_tokens: set[str], entry_key: str) -> float:
         entry_tokens = self.entry_tokens[entry_key]
@@ -89,8 +80,8 @@ class Matcher:
         return round(score, 3)
 
 
-def _candidate(entry: PriceEntry, score: float) -> Candidate:
-    return Candidate(
+def _candidate(entry: PriceEntry, score: float) -> HistoryCandidate:
+    return HistoryCandidate(
         key=entry.key,
         name=entry.name,
         group=entry.group,

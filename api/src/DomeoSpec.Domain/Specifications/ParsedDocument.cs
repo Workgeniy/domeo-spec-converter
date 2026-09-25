@@ -21,7 +21,64 @@ public sealed record ParsedDocument
     public IReadOnlyList<SourceDocument> Documents { get; init; } = [];
     /// <summary>Параметры КП для выгрузки; null — просто спецификация без листа «КП».</summary>
     public KpSettings? Kp { get; init; }
+    /// <summary>Вид выгрузки: working, kp или cost (себестоимость); null — kp при наличии параметров, иначе working.</summary>
+    public string? Kind { get; init; }
 }
+
+/// <summary>Позиция прайса закупки, похожая на позицию спецификации.</summary>
+public sealed record HistoryCandidate
+{
+    public string Key { get; init; } = "";
+    public string Name { get; init; } = "";
+    public string Group { get; init; } = "";
+    /// <summary>1.0 — точное совпадение наименования.</summary>
+    public double Score { get; init; }
+    public double? PriceMin { get; init; }
+    public double? PriceMax { get; init; }
+    public double? PriceMedian { get; init; }
+    public double? PriceLast { get; init; }
+    public string? LastDate { get; init; }
+    public int Purchases { get; init; }
+    public IReadOnlyList<string> Descriptions { get; init; } = [];
+}
+
+/// <summary>Одна покупка из истории — чтобы оператор видел, откуда эталон.</summary>
+public sealed record HistoryPurchase
+{
+    public string? PurchasedAt { get; init; }
+    public double UnitPrice { get; init; }
+    public double Qty { get; init; }
+    public string PartnerItem { get; init; } = "";
+    public string Order { get; init; } = "";
+    public bool Outlier { get; init; }
+}
+
+/// <summary>Результат сопоставления позиции с историей закупок.</summary>
+public sealed record HistoryPrice
+{
+    /// <summary>exact | fuzzy | analog | none.</summary>
+    public string Kind { get; init; } = "none";
+    public HistoryCandidate? Best { get; init; }
+    public IReadOnlyList<HistoryCandidate> Candidates { get; init; } = [];
+    public IReadOnlyList<HistoryPurchase> Purchases { get; init; } = [];
+    public string MatchedAt { get; init; } = "";
+}
+
+/// <summary>Сводка по загруженному прайсу закупки.</summary>
+public sealed record PriceListInfo
+{
+    public string Source { get; init; } = "";
+    public string BuiltAt { get; init; } = "";
+    public int RowsTotal { get; init; }
+    public int Entries { get; init; }
+    public int WithTwoOrMore { get; init; }
+    public int Purchases { get; init; }
+    public int Outliers { get; init; }
+    public string? PeriodFrom { get; init; }
+    public string? PeriodTo { get; init; }
+}
+
+public sealed record MatchRequestItem(string Id, string Name, string Description = "");
 
 /// <summary>
 /// Параметры КП — приложений к договору по образцу заказчика. Правила цены применяются поверх
@@ -98,8 +155,16 @@ public sealed record SummaryItem
     /// <summary>«Раздел» в КП.</summary>
     public string Section { get; init; } = "";
     public string Note { get; init; } = "";
-    /// <summary>Базовая цена за единицу с НДС: от менеджера или этапа цен; null — не проставлена.</summary>
+    /// <summary>Базовая цена за единицу с НДС — выбранная оператором (см. <see cref="PriceSource"/>); null — не проставлена.</summary>
     public double? Price { get; init; }
+    /// <summary>Откуда взята цена: manual, history_min, history_max, history_median, history_last, internet или пусто.</summary>
+    public string PriceSource { get; init; } = "";
+    /// <summary>Сопоставление с историей закупок; null — ещё не сопоставляли.</summary>
+    public HistoryPrice? History { get; init; }
+    /// <summary>Цена из интернета на дату (следующий шаг).</summary>
+    public double? InternetPrice { get; init; }
+    public string InternetSource { get; init; } = "";
+    public string InternetDate { get; init; } = "";
     /// <summary>Подлежит монтажу/пусконаладке → лист «1» (Приложение №1.1), иначе инвентарь → лист «2».</summary>
     public bool Installation { get; init; } = true;
     public string SourceDoc { get; init; } = "";

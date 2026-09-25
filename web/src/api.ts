@@ -27,6 +27,46 @@ export interface GroupQty {
   qty: number | null
 }
 
+/** Позиция прайса закупки, похожая на позицию спецификации. */
+export interface HistoryCandidate {
+  key: string
+  name: string
+  group: string
+  /** 1.0 — точное совпадение наименования. */
+  score: number
+  price_min: number | null
+  price_max: number | null
+  price_median: number | null
+  price_last: number | null
+  last_date: string | null
+  purchases: number
+  descriptions: string[]
+}
+
+/** Одна покупка из истории — чтобы оператор видел, откуда эталон. */
+export interface HistoryPurchase {
+  purchased_at: string | null
+  unit_price: number
+  qty: number
+  partner_item: string
+  order: string
+  outlier: boolean
+}
+
+export type MatchKind = 'exact' | 'fuzzy' | 'analog' | 'none'
+
+/** Результат сопоставления позиции с историей закупок. */
+export interface HistoryPrice {
+  kind: MatchKind
+  best: HistoryCandidate | null
+  candidates: HistoryCandidate[]
+  purchases: HistoryPurchase[]
+  matched_at: string
+}
+
+/** Откуда взята базовая цена позиции. */
+export type PriceSource = '' | 'manual' | 'history_min' | 'history_max' | 'history_median' | 'history_last' | 'internet'
+
 export interface SummaryItem {
   pos: string
   pos_key: string
@@ -38,8 +78,15 @@ export interface SummaryItem {
   qty: number | null
   section: string
   note: string
-  /** Базовая цена за единицу с НДС; null — не проставлена. */
+  /** Базовая цена за единицу с НДС — выбранная оператором; null — не проставлена. */
   price: number | null
+  price_source: PriceSource
+  /** Сопоставление с историей закупок; null — ещё не сопоставляли. */
+  history: HistoryPrice | null
+  /** Цена из интернета на дату (следующий шаг). */
+  internet_price: number | null
+  internet_source: string
+  internet_date: string
   /** Подлежит монтажу/пусконаладке → лист «1» (Приложение №1.1), иначе инвентарь → лист «2». */
   installation: boolean
   source_doc: string
@@ -99,6 +146,29 @@ export interface ParsedDocument {
   documents: SourceDocument[]
   /** Только в запросе на выгрузку: параметры КП. */
   kp?: KpSettings | null
+  /** Только в запросе на выгрузку: working — рабочая, kp — приложения к договору, cost — себестоимость. */
+  kind?: ExportKind
+}
+
+export type ExportKind = 'working' | 'kp' | 'cost'
+
+/** Сводка по загруженному прайсу закупки. */
+export interface PriceListInfo {
+  source: string
+  built_at: string
+  rows_total: number
+  entries: number
+  with_two_or_more: number
+  purchases: number
+  outliers: number
+  period_from: string | null
+  period_to: string | null
+}
+
+export interface MatchRequestItem {
+  id: string
+  name: string
+  description: string
 }
 
 export interface Health {
@@ -140,6 +210,25 @@ export function parsePdf(file: File): Promise<ParsedDocument> {
   const form = new FormData()
   form.append('file', file)
   return fetch('/api/specifications/parse', { method: 'POST', body: form }).then((r) => readData<ParsedDocument>(r))
+}
+
+export function getPriceList(): Promise<PriceListInfo | null> {
+  // Пока прайс не загружен, api отвечает конвертом без data — это «нет прайса», а не ошибка.
+  return fetch('/api/specifications/pricelist').then((r) => readData<PriceListInfo | null | undefined>(r).then((d) => d ?? null))
+}
+
+export function uploadPriceList(file: File): Promise<PriceListInfo> {
+  const form = new FormData()
+  form.append('file', file)
+  return fetch('/api/specifications/pricelist', { method: 'POST', body: form }).then((r) => readData<PriceListInfo>(r))
+}
+
+export function matchHistory(items: MatchRequestItem[]): Promise<Record<string, HistoryPrice>> {
+  return fetch('/api/specifications/pricelist/match', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items }),
+  }).then((r) => readData<{ matches: Record<string, HistoryPrice> }>(r).then((d) => d.matches))
 }
 
 export async function exportExcel(doc: ParsedDocument): Promise<{ blob: Blob; fileName: string }> {

@@ -1,4 +1,5 @@
 using DomeoSpec.Application.Parsing;
+using DomeoSpec.Application.Pricing;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace DomeoSpec.Application;
@@ -10,6 +11,8 @@ public static class DependencyInjection
     {
         services.AddScoped<ParseSpecificationHandler>();
         services.AddScoped<ExportSpecificationHandler>();
+        services.AddScoped<UploadPriceListHandler>();
+        services.AddScoped<MatchPriceListHandler>();
         return services;
     }
 }
