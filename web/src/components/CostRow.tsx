@@ -1,7 +1,7 @@
-import { Badge, Button, HoverCard, NumberInput, ScrollArea, Table, Text, Tooltip } from '@mantine/core'
+import { Anchor, Badge, Button, Group, HoverCard, NumberInput, ScrollArea, Table, Text, Tooltip } from '@mantine/core'
 import { memo } from 'react'
 
-import type { HistoryPrice, MatchKind, PriceSource } from '../api'
+import type { HistoryPrice, InternetOffer, MatchKind, PriceSource } from '../api'
 import type { HistoryChoice, RowKey, SummaryRow as Row } from '../store'
 import { formatMoney, formatQty } from './format'
 
@@ -11,6 +11,8 @@ interface Props {
   rowKey: RowKey
   onChange: (key: RowKey, patch: Partial<Row>) => void
   onChoose: (keys: RowKey[], which: HistoryChoice) => void
+  onChooseInternet: (keys: RowKey[]) => void
+  onOffer: (key: RowKey, offer: InternetOffer) => void
 }
 
 const KIND_LABEL: Record<MatchKind, { label: string; color: string }> = {
@@ -123,7 +125,96 @@ function PriceChoice({ label, value, active, onClick }: { label: string; value: 
   )
 }
 
-export const CostRowView = memo(function CostRowView({ number, row, rowKey, onChange, onChoose }: Props) {
+/** Графа «Интернет на дату»: цена (щелчок — в базовую), под ней дата и продавец, при наведении — все предложения. */
+function InternetCell({ row, active, onChoose, onOffer }: { row: Row; active: boolean; onChoose: () => void; onOffer: (offer: InternetOffer) => void }) {
+  const lookup = row.internet ?? null
+  const price = row.internet_price ?? null
+  if (!lookup && price === null) {
+    return (
+      <Text size="sm" c="dimmed" ta="right">
+        —
+      </Text>
+    )
+  }
+  if (lookup && price === null && lookup.status !== 'found') {
+    const error = lookup.status === 'error'
+    return (
+      <Tooltip label={lookup.comment || (error ? 'поиск не удался' : 'подходящих предложений не нашлось')} multiline w={320}>
+        <Text size="xs" c={error ? 'red' : 'dimmed'} ta="right">
+          {error ? 'ошибка поиска' : 'не найдено'}
+          <br />
+          {lookup.looked_up_at}
+        </Text>
+      </Tooltip>
+    )
+  }
+  const chosen = lookup?.offers.find((o) => o.url === row.internet_source)
+  return (
+    <HoverCard width={600} shadow="md" withArrow openDelay={200} disabled={!lookup || lookup.offers.length === 0}>
+      <HoverCard.Target>
+        <div>
+          <PriceChoice label="цену из интернета" value={price} active={active} onClick={onChoose} />
+          <Text size="xs" c="dimmed" ta="right" lineClamp={1}>
+            {row.internet_date}
+            {chosen?.shop ? ` · ${chosen.shop}` : ''}
+            {chosen?.analog ? ' · аналог' : ''}
+          </Text>
+        </div>
+      </HoverCard.Target>
+      <HoverCard.Dropdown>
+        <ScrollArea.Autosize mah={380}>
+          <Text size="xs" fw={600} mb={6}>
+            Предложения в интернете на {lookup?.looked_up_at}
+          </Text>
+          {lookup?.offers.map((o, i) => (
+            <Group key={i} gap={8} wrap="nowrap" align="flex-start" mb={6}>
+              <Tooltip label="Сделать ценой из интернета для позиции">
+                <Button
+                  size="compact-xs"
+                  variant={o.url === row.internet_source ? 'filled' : 'light'}
+                  miw={100}
+                  onClick={() => onOffer(o)}
+                  styles={{ inner: { justifyContent: 'flex-end' } }}
+                >
+                  {formatMoney(o.price)}
+                </Button>
+              </Tooltip>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <Text size="xs" lineClamp={2}>
+                  {o.title}
+                  {o.analog && (
+                    <Badge size="xs" color="orange" variant="light" ml={6}>
+                      аналог
+                    </Badge>
+                  )}
+                </Text>
+                <Text size="xs" c="dimmed" lineClamp={2}>
+                  {o.shop}
+                  {o.url && (
+                    <>
+                      {' · '}
+                      <Anchor href={o.url} target="_blank" rel="noopener noreferrer" size="xs">
+                        открыть страницу
+                      </Anchor>
+                    </>
+                  )}
+                  {o.note && ` · ${o.note}`}
+                </Text>
+              </div>
+            </Group>
+          ))}
+          {lookup?.comment && (
+            <Text size="xs" c="dimmed" mt={4}>
+              {lookup.comment}
+            </Text>
+          )}
+        </ScrollArea.Autosize>
+      </HoverCard.Dropdown>
+    </HoverCard>
+  )
+}
+
+export const CostRowView = memo(function CostRowView({ number, row, rowKey, onChange, onChoose, onChooseInternet, onOffer }: Props) {
   const best = row.history?.best ?? null
   const source = row.price_source ?? ''
   const total = row.price === null || row.qty === null ? null : row.price * row.qty
@@ -160,9 +251,7 @@ export const CostRowView = memo(function CostRowView({ number, row, rowKey, onCh
         <MatchCell history={row.history ?? null} />
       </Table.Td>
       <Table.Td>
-        <Text size="sm" ta="right" c="dimmed">
-          {row.internet_price === null || row.internet_price === undefined ? '—' : formatMoney(row.internet_price)}
-        </Text>
+        <InternetCell row={row} active={source === 'internet'} onChoose={() => onChooseInternet([rowKey])} onOffer={(offer) => onOffer(rowKey, offer)} />
       </Table.Td>
       <Table.Td>
         <PriceChoice label="минимум по истории" value={best?.price_min ?? null} active={source === 'history_min'} onClick={() => onChoose([rowKey], 'min')} />

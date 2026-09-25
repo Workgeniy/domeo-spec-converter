@@ -52,6 +52,31 @@ public sealed class FakePricing : IPricingEngine
             i => i.Name.Contains("Стул") ? new HistoryPrice { Kind = "exact", Best = best, Candidates = [best] } : new HistoryPrice { Kind = "none" });
         return Task.FromResult(result);
     }
+
+    public bool InternetConfigured { get; set; } = true;
+    public IReadOnlyList<MatchRequestItem>? LastLookedUp { get; private set; }
+    public bool LastRefresh { get; private set; }
+
+    public Task<InternetSearchInfo> GetInternetSearchAsync(CancellationToken ct) =>
+        Task.FromResult(new InternetSearchInfo
+        {
+            Configured = InternetConfigured,
+            Provider = InternetConfigured ? "claude-web-search" : "",
+            Model = InternetConfigured ? "claude-opus-5" : "",
+            Cached = 2,
+        });
+
+    public Task<IReadOnlyDictionary<string, InternetLookup>> LookupInternetAsync(IReadOnlyList<MatchRequestItem> items, bool refresh, CancellationToken ct)
+    {
+        if (!InternetConfigured) throw new ValidationFailedException("Поиск цен в интернете не настроен.");
+        LastLookedUp = items;
+        LastRefresh = refresh;
+        var offer = new InternetOffer { Title = "Стул детский регулируемый", Url = "https://shop.example/1", Shop = "Магазин", Price = 1250 };
+        IReadOnlyDictionary<string, InternetLookup> result = items.ToDictionary(
+            i => i.Id,
+            i => new InternetLookup { Status = "found", Query = i.Name, LookedUpAt = "2026-09-25", Offers = [offer], Price = 1250, Provider = "fake", Searches = 2 });
+        return Task.FromResult(result);
+    }
 }
 
 public sealed class FakeEngine : IParsingEngine

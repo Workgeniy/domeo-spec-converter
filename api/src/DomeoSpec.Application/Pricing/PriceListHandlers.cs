@@ -37,3 +37,20 @@ public sealed class MatchPriceListHandler(IPricingEngine engine)
         return await engine.MatchAsync(items, ct);
     }
 }
+
+/// <summary>Сценарий «найти цены в интернете»: пачка небольшая — на позицию уходят десятки секунд.</summary>
+public sealed class LookupInternetHandler(IPricingEngine engine)
+{
+    public const int MaxItems = 50;
+
+    public async Task<IReadOnlyDictionary<string, InternetLookup>> HandleAsync(IReadOnlyList<MatchRequestItem> items, bool refresh, CancellationToken ct)
+    {
+        if (items.Count == 0)
+            throw new ValidationFailedException("Нет позиций для поиска.");
+        if (items.Count > MaxItems)
+            throw new ValidationFailedException($"За один запрос ищем не больше {MaxItems} позиций.");
+        if (items.Any(i => string.IsNullOrWhiteSpace(i.Id) || string.IsNullOrWhiteSpace(i.Name)))
+            throw new ValidationFailedException("У каждой позиции должны быть id и наименование.");
+        return await engine.LookupInternetAsync(items, refresh, ct);
+    }
+}

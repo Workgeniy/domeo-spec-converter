@@ -118,6 +118,8 @@ def build_workbook(data: ExportRequest) -> Workbook:
     if kind == "cost":
         _fill_cost_sheet(wb.active, data, numbered)
         _fill_history_sheet(wb.create_sheet("Покупки по истории"), numbered)
+        if any(item.internet for _, item in numbered):
+            _fill_internet_sheet(wb.create_sheet("Предложения из интернета"), numbered)
         return wb
     _fill_appendix(wb.active, data, numbered, None, APPENDIX_1, sheet_title="Спецификация")
     _fill_detail_sheet(wb.create_sheet("По помещениям"), data.items)
@@ -207,6 +209,13 @@ def _fill_cost_sheet(ws: Worksheet, data: ExportRequest, rows: list[tuple[int, S
         _write_values(ws, r, values, money=(6, 8, 10, 11, 12, 15, 17), percent=0, text=(2, 3, 4, 9, 14, 16))
         if h and h.kind == "analog":
             ws.cell(r, 14).font = Font(name=FONT, size=10, color="C00000")  # аналог — оператор должен проверить
+        if item.internet_source.startswith("http"):
+            # Вместо длинной ссылки — дата и продавец, сама ссылка — гиперссылкой.
+            offer = next((o for o in (item.internet.offers if item.internet else []) if o.url == item.internet_source), None)
+            source = ws.cell(r, 9)
+            source.value = " · ".join(p for p in (item.internet_date, offer.shop if offer else "ссылка") if p)
+            source.hyperlink = item.internet_source
+            source.font = Font(name=FONT, size=10, color="0563C1", underline="single")
         ws.row_dimensions[r].height = _row_height([(item.description, COST_COLUMNS[3][1]), (match_text, COST_COLUMNS[13][1])])
         r += 1
     last = max(r - 1, first)
@@ -251,6 +260,44 @@ def _fill_history_sheet(ws: Worksheet, rows: list[tuple[int, SummaryItem]]) -> N
             r += 1
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(HISTORY_COLUMNS))}{max(r - 1, 2)}"
+
+
+INTERNET_COLUMNS = [("№", 5.6), ("№ поз. в ТХ", 10), ("Позиция", 34), ("Дата", 11), ("Продавец", 20), ("Предложение", 44), ("Цена", 13), ("Аналог", 8), ("Ссылка", 50), ("Примечание", 34)]
+
+
+def _fill_internet_sheet(ws: Worksheet, rows: list[tuple[int, SummaryItem]]) -> None:
+    """Все найденные в интернете предложения по каждой позиции — откуда взялась цена на дату."""
+    _write_header(ws, INTERNET_COLUMNS)
+    r = 2
+
+    def put(values: list[object], *, dim: bool = False) -> None:
+        nonlocal r
+        for idx, value in enumerate(values, start=1):
+            cell = ws.cell(r, idx, value)
+            cell.font = Font(name=FONT, size=10, color="808080" if dim else None)
+            cell.border = BORDER
+            cell.alignment = Alignment(horizontal="center" if idx in (1, 2, 4, 7, 8) else "left", vertical="center", wrap_text=True)
+            if idx == 7:
+                cell.number_format = MONEY
+            if idx == 9 and isinstance(value, str) and value.startswith("http"):
+                cell.hyperlink = value
+                cell.font = Font(name=FONT, size=10, color="0563C1", underline="single")
+        r += 1
+
+    for number, item in rows:
+        lookup = item.internet
+        if not lookup:
+            continue
+        if not lookup.offers:
+            note = lookup.comment if lookup.status == "not_found" else f"ошибка: {lookup.comment}"
+            put([number, item.pos, item.name, lookup.looked_up_at, "", "не найдено" if lookup.status == "not_found" else "не удалось найти", None, "", "", note], dim=True)
+            continue
+        for offer in lookup.offers:
+            put([number, item.pos, item.name, lookup.looked_up_at, offer.shop, offer.title, offer.price, "да" if offer.analog else "", offer.url, offer.note])
+        if lookup.comment:
+            put([number, item.pos, item.name, lookup.looked_up_at, "", f"Комментарий: {lookup.comment}", None, "", "", ""], dim=True)
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(INTERNET_COLUMNS))}{max(r - 1, 2)}"
 
 
 # ---------- приложения к договору (листы «1» и «2») ----------

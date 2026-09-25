@@ -10,8 +10,13 @@ services:
       context: ../core
     restart: unless-stopped
     environment:
-      # Прайс закупки (pricelist.json) живёт в томе — переживает пересборку образа.
+      # Прайс закупки (pricelist.json) и кэш интернет-цен живут в томе — переживают пересборку образа.
       DATA_DIR: /data
+    # Ключи (ANTHROPIC_API_KEY для поиска цен в интернете) — в secrets.env рядом с compose на ВМ;
+    # файла может не быть, тогда поиск в интернете просто выключен. deploy.sh его не трогает.
+    env_file:
+      - path: secrets.env
+        required: false
     volumes:
       - core_data:/data
     # Разбор 100-страничного тома — до ~500 МБ; ВМ на 4 ГБ делит память с соседями.

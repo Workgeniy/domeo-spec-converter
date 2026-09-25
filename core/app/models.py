@@ -74,6 +74,33 @@ class HistoryPrice(BaseModel):
     matched_at: str = ""
 
 
+class InternetOffer(BaseModel):
+    """Одно предложение из интернета — чтобы оператор видел, где и почём нашлось."""
+
+    title: str = ""
+    url: str = ""
+    shop: str = ""
+    price: float  # за единицу, руб. с НДС
+    analog: bool = False  # не та же позиция, а похожая
+    note: str = ""
+
+
+InternetStatus = Literal["found", "not_found", "error"]
+
+
+class InternetLookup(BaseModel):
+    """Результат поиска цены в интернете на дату."""
+
+    status: InternetStatus = "not_found"
+    query: str = ""
+    looked_up_at: str = ""  # дата, на которую найдена цена (ГГГГ-ММ-ДД)
+    offers: list[InternetOffer] = Field(default_factory=list)
+    price: float | None = None  # рекомендуемая цена: типичная среди подходящих предложений
+    comment: str = ""
+    provider: str = ""
+    searches: int = 0  # сколько поисковых запросов ушло (для оценки расходов)
+
+
 # Откуда взята базовая цена позиции: выбор оператора.
 PriceSource = Literal["", "manual", "history_min", "history_max", "history_median", "history_last", "internet"]
 
@@ -94,8 +121,9 @@ class SummaryItem(BaseModel):
     price: float | None = None  # базовая цена за единицу с НДС — выбранная оператором (см. price_source)
     price_source: PriceSource = ""
     history: HistoryPrice | None = None  # сопоставление с историей закупок
-    internet_price: float | None = None  # цена из интернета на дату (следующий шаг)
-    internet_source: str = ""
+    internet: InternetLookup | None = None  # поиск в интернете: предложения и рекомендуемая цена
+    internet_price: float | None = None  # цена из интернета на дату — выбранное предложение
+    internet_source: str = ""  # ссылка на предложение
     internet_date: str = ""
     # Подлежит монтажу/пусконаладке → лист «1» (Приложение №1.1, с графами СМР);
     # иначе инвентарь → лист «2» (Приложение №1.2).
@@ -227,6 +255,7 @@ class MatchRequestItem(BaseModel):
     id: str
     name: str
     description: str = ""
+    unit: str = ""  # для поиска в интернете: цена нужна за эту единицу
 
 
 class MatchRequest(BaseModel):
@@ -235,3 +264,25 @@ class MatchRequest(BaseModel):
 
 class MatchResponse(BaseModel):
     matches: dict[str, HistoryPrice] = Field(default_factory=dict)  # id позиции → результат
+
+
+# ---------- цена из интернета ----------
+
+
+class InternetSearchInfo(BaseModel):
+    """Состояние поиска цен в интернете: настроен ли, чем ищем, сколько в кэше."""
+
+    configured: bool = False
+    provider: str = ""
+    model: str = ""
+    cached: int = 0
+    ttl_days: int = 7
+
+
+class InternetLookupRequest(BaseModel):
+    items: list[MatchRequestItem] = Field(default_factory=list)
+    refresh: bool = False  # искать заново, не глядя на кэш
+
+
+class InternetLookupResponse(BaseModel):
+    lookups: dict[str, InternetLookup] = Field(default_factory=dict)  # id позиции → результат

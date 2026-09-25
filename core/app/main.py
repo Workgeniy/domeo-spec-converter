@@ -16,21 +16,36 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
+from .env import load_env_file
 from .export.excel import build_workbook
-from .models import ExportRequest, MatchRequest, MatchResponse, ParsedDocument, PriceListInfo
+from .models import (
+    ExportRequest,
+    InternetLookupRequest,
+    InternetLookupResponse,
+    InternetSearchInfo,
+    MatchRequest,
+    MatchResponse,
+    ParsedDocument,
+    PriceListInfo,
+)
 from .parsing.ocr import default_provider
 from .parsing.spec_parser import parse_pdf
+from .pricing.internet import InternetPriceService
 from .pricing.store import PriceListStore
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+MAX_INTERNET_ITEMS = 50  # поиск — долгий (десятки секунд на позицию), фронт шлёт пачками
 
+load_env_file()  # ключи для локального запуска — из core/.env, если он есть
 price_lists = PriceListStore()
+internet_prices = InternetPriceService.from_env()
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Прайс закупки, загруженный раньше, подхватывается при старте.
+    # Прайс закупки и кэш интернет-цен, накопленные раньше, подхватываются при старте.
     price_lists.load()
+    internet_prices.load()
     yield
 
 
@@ -40,7 +55,12 @@ app = FastAPI(title="Domeo Spec Converter — ядро разбора", version=
 @app.get("/api/health")
 def health() -> dict:
     ocr = default_provider()
-    return {"status": "ok", "ocr": ocr.name if ocr else None, "pricelist": price_lists.price_list is not None}
+    return {
+        "status": "ok",
+        "ocr": ocr.name if ocr else None,
+        "pricelist": price_lists.price_list is not None,
+        "internet": internet_prices.configured,
+    }
 
 
 # ---------- прайс закупки ----------
@@ -76,6 +96,24 @@ def pricelist_match(request: MatchRequest) -> MatchResponse:
     if price_lists.matcher is None:
         raise HTTPException(409, "Прайс закупки ещё не загружен")
     return MatchResponse(matches=price_lists.match(request.items))
+
+
+# ---------- цена из интернета ----------
+
+
+@app.get("/api/internet", response_model=InternetSearchInfo)
+def internet_info() -> InternetSearchInfo:
+    return internet_prices.info()
+
+
+@app.post("/api/internet/lookup", response_model=InternetLookupResponse)
+def internet_lookup(request: InternetLookupRequest) -> InternetLookupResponse:
+    """Поиск цен на дату для пачки позиций. Синхронный обработчик: ждём модель в пуле потоков."""
+    if not internet_prices.configured:
+        raise HTTPException(409, "Поиск цен в интернете не настроен: на сервере нет ключа ANTHROPIC_API_KEY")
+    if len(request.items) > MAX_INTERNET_ITEMS:
+        raise HTTPException(400, f"За один запрос ищем не больше {MAX_INTERNET_ITEMS} позиций")
+    return InternetLookupResponse(lookups=internet_prices.lookup_many(request.items, refresh=request.refresh))
 
 
 @app.post("/api/parse", response_model=ParsedDocument)

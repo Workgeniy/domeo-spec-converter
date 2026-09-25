@@ -64,6 +64,35 @@ public sealed record HistoryPrice
     public string MatchedAt { get; init; } = "";
 }
 
+/// <summary>Одно предложение из интернета — где и почём нашлось.</summary>
+public sealed record InternetOffer
+{
+    public string Title { get; init; } = "";
+    public string Url { get; init; } = "";
+    public string Shop { get; init; } = "";
+    /// <summary>За единицу, руб. с НДС.</summary>
+    public double Price { get; init; }
+    /// <summary>Не та же позиция, а похожая.</summary>
+    public bool Analog { get; init; }
+    public string Note { get; init; } = "";
+}
+
+/// <summary>Результат поиска цены в интернете на дату.</summary>
+public sealed record InternetLookup
+{
+    /// <summary>found | not_found | error.</summary>
+    public string Status { get; init; } = "not_found";
+    public string Query { get; init; } = "";
+    /// <summary>Дата, на которую найдена цена (ГГГГ-ММ-ДД).</summary>
+    public string LookedUpAt { get; init; } = "";
+    public IReadOnlyList<InternetOffer> Offers { get; init; } = [];
+    /// <summary>Рекомендуемая цена — типичная среди подходящих предложений.</summary>
+    public double? Price { get; init; }
+    public string Comment { get; init; } = "";
+    public string Provider { get; init; } = "";
+    public int Searches { get; init; }
+}
+
 /// <summary>Сводка по загруженному прайсу закупки.</summary>
 public sealed record PriceListInfo
 {
@@ -78,7 +107,17 @@ public sealed record PriceListInfo
     public string? PeriodTo { get; init; }
 }
 
-public sealed record MatchRequestItem(string Id, string Name, string Description = "");
+public sealed record MatchRequestItem(string Id, string Name, string Description = "", string Unit = "");
+
+/// <summary>Состояние поиска цен в интернете: настроен ли ключ, чем ищем, сколько в кэше.</summary>
+public sealed record InternetSearchInfo
+{
+    public bool Configured { get; init; }
+    public string Provider { get; init; } = "";
+    public string Model { get; init; } = "";
+    public int Cached { get; init; }
+    public int TtlDays { get; init; } = 7;
+}
 
 /// <summary>
 /// Параметры КП — приложений к договору по образцу заказчика. Правила цены применяются поверх
@@ -161,7 +200,9 @@ public sealed record SummaryItem
     public string PriceSource { get; init; } = "";
     /// <summary>Сопоставление с историей закупок; null — ещё не сопоставляли.</summary>
     public HistoryPrice? History { get; init; }
-    /// <summary>Цена из интернета на дату (следующий шаг).</summary>
+    /// <summary>Поиск в интернете: предложения и рекомендуемая цена; null — ещё не искали.</summary>
+    public InternetLookup? Internet { get; init; }
+    /// <summary>Цена из интернета на дату — выбранное предложение.</summary>
     public double? InternetPrice { get; init; }
     public string InternetSource { get; init; } = "";
     public string InternetDate { get; init; } = "";

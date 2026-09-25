@@ -4,7 +4,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-import type { HistoryPrice, KpSettings, ParsedDocument, PriceSource, SummaryItem } from './api'
+import type { HistoryPrice, InternetLookup, InternetOffer, KpSettings, ParsedDocument, PriceSource, SummaryItem } from './api'
 import { DEFAULT_KP } from './kp'
 
 /** Строка свода с клиентскими пометками, которых нет в модели ядра. */
@@ -39,8 +39,31 @@ interface WorkspaceState {
   applyMatches: (matches: Record<string, HistoryPrice>) => void
   /** Взять в базовую цену эталон из истории у выбранных строк (где есть сопоставление). */
   chooseHistoryPrice: (keys: RowKey[], which: HistoryChoice) => void
+  /** Результаты поиска в интернете: ключ строки (docId:index) → результат. */
+  applyInternet: (lookups: Record<string, InternetLookup>) => void
+  /** Взять в базовую цену цену из интернета у выбранных строк (где она найдена). */
+  chooseInternetPrice: (keys: RowKey[]) => void
+  /** Сделать ценой из интернета другое предложение из найденных. */
+  chooseOffer: (key: RowKey, offer: InternetOffer) => void
   setKp: (patch: Partial<KpSettings>) => void
   clear: () => void
+}
+
+/** Предложение, из которого взята рекомендуемая цена: точное с той же ценой, иначе первое. */
+function offerForPrice(lookup: InternetLookup): InternetOffer | undefined {
+  if (lookup.price === null) return lookup.offers[0]
+  return lookup.offers.find((o) => !o.analog && o.price === lookup.price) ?? lookup.offers.find((o) => o.price === lookup.price) ?? lookup.offers[0]
+}
+
+function withLookup(row: SummaryRow, lookup: InternetLookup): SummaryRow {
+  // Ошибка поиска не стирает прежний удачный результат — оператор увидит её в сводке панели.
+  if (lookup.status === 'error' && row.internet && row.internet.status !== 'error') return row
+  if (lookup.status !== 'found') return { ...row, internet: lookup, internet_price: null, internet_source: '', internet_date: lookup.looked_up_at }
+  const offer = offerForPrice(lookup)
+  const price = lookup.price ?? offer?.price ?? null
+  const next: SummaryRow = { ...row, internet: lookup, internet_price: price, internet_source: offer?.url ?? '', internet_date: lookup.looked_up_at }
+  // Если базовая цена уже взята из интернета — она следует за свежим результатом.
+  return row.price_source === 'internet' && price !== null ? { ...next, price } : next
 }
 
 export type HistoryChoice = 'min' | 'max' | 'median' | 'last'
@@ -62,6 +85,12 @@ function newId(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function patchRowsWith(documents: WorkspaceDocument[], key: RowKey, update: (row: SummaryRow) => SummaryRow): WorkspaceDocument[] {
+  return documents.map((d) =>
+    d.id !== key.docId ? d : { ...d, doc: { ...d.doc, summary: d.doc.summary.map((row, i) => (i === key.index ? update(row) : row)) } },
+  )
 }
 
 function patchRows(documents: WorkspaceDocument[], keys: RowKey[], patch: Partial<SummaryRow>): WorkspaceDocument[] {
@@ -126,6 +155,46 @@ export const useWorkspace = create<WorkspaceState>()(
             })),
           }
         }),
+      applyInternet: (lookups) =>
+        set((s) => ({
+          documents: s.documents.map((d) => ({
+            ...d,
+            doc: {
+              ...d.doc,
+              summary: d.doc.summary.map((row, i) => {
+                const lookup = lookups[`${d.id}:${i}`]
+                return lookup ? withLookup(row, lookup) : row
+              }),
+            },
+          })),
+        })),
+      chooseInternetPrice: (keys) =>
+        set((s) => {
+          const wanted = new Set(keys.map(rowKey))
+          return {
+            documents: s.documents.map((d) => ({
+              ...d,
+              doc: {
+                ...d.doc,
+                summary: d.doc.summary.map((row, i) => {
+                  if (!wanted.has(`${d.id}:${i}`)) return row
+                  const price = row.internet_price ?? null
+                  return price === null ? row : { ...row, price, price_source: 'internet' }
+                }),
+              },
+            })),
+          }
+        }),
+      chooseOffer: (key, offer) =>
+        set((s) => ({
+          documents: patchRowsWith(s.documents, key, (row) => ({
+            ...row,
+            internet_price: offer.price,
+            internet_source: offer.url,
+            internet_date: row.internet?.looked_up_at || row.internet_date,
+            ...(row.price_source === 'internet' ? { price: offer.price } : {}),
+          })),
+        })),
       setKp: (patch) => set((s) => ({ kp: { ...s.kp, ...patch } })),
       // Правила расчёта и должности — свои у компании, они переживают смену объекта;
       // сбрасываются только данные конкретного объекта (договор).
@@ -133,9 +202,19 @@ export const useWorkspace = create<WorkspaceState>()(
     }),
     {
       name: 'domeo-spec-workspace',
-      version: 5,
+      version: 6,
       migrate: (persisted, version) => {
         let state = persisted as Partial<WorkspaceState>
+        if (version < 6 && state.documents) {
+          // v6: у строк свода появился результат поиска в интернете.
+          state = {
+            ...state,
+            documents: state.documents.map((d) => ({
+              ...d,
+              doc: { ...d.doc, summary: d.doc.summary.map((row) => ({ internet: null, ...row })) },
+            })),
+          }
+        }
         if (version < 5 && state.documents) {
           // v5: у строк свода появились источник цены, сопоставление с историей и цена из интернета.
           state = {

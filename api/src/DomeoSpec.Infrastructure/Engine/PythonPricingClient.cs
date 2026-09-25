@@ -53,6 +53,19 @@ public sealed class PythonPricingClient(HttpClient http) : IPricingEngine
         return body?.Matches ?? new Dictionary<string, HistoryPrice>();
     }
 
+    public async Task<InternetSearchInfo> GetInternetSearchAsync(CancellationToken ct)
+    {
+        using var response = await SendAsync(() => http.GetAsync("/api/internet", ct), ct);
+        return await response.Content.ReadFromJsonAsync<InternetSearchInfo>(Json, ct) ?? new InternetSearchInfo();
+    }
+
+    public async Task<IReadOnlyDictionary<string, InternetLookup>> LookupInternetAsync(IReadOnlyList<MatchRequestItem> items, bool refresh, CancellationToken ct)
+    {
+        using var response = await SendAsync(() => http.PostAsJsonAsync("/api/internet/lookup", new { items, refresh }, Json, ct), ct);
+        var body = await response.Content.ReadFromJsonAsync<LookupBody>(Json, ct);
+        return body?.Lookups ?? new Dictionary<string, InternetLookup>();
+    }
+
     private static async Task<HttpResponseMessage> SendAsync(Func<Task<HttpResponseMessage>> send, CancellationToken ct)
     {
         HttpResponseMessage response;
@@ -82,15 +95,17 @@ public sealed class PythonPricingClient(HttpClient http) : IPricingEngine
         }
         var status = response.StatusCode;
         response.Dispose();
-        // 409 у ядра — «прайс не загружен»: это правило предметной области, а не сбой.
+        // 409 у ядра — «прайс не загружен» / «поиск не настроен»: правило предметной области, а не сбой.
         if (status is HttpStatusCode.Conflict)
             throw new ValidationFailedException(detail ?? "Прайс закупки ещё не загружен.");
         if (status is HttpStatusCode.UnprocessableEntity or HttpStatusCode.BadRequest)
-            throw new EngineFailureException(detail ?? "Ядро не смогло обработать выгрузку.");
+            throw new EngineFailureException(detail ?? "Ядро не смогло обработать запрос.");
         throw new ServiceUnavailableException($"Ядро разбора ответило {(int)status}: {detail}");
     }
 
     private sealed record MatchBody(Dictionary<string, HistoryPrice> Matches);
+
+    private sealed record LookupBody(Dictionary<string, InternetLookup> Lookups);
 
     private sealed record ErrorBody(string? Detail);
 }

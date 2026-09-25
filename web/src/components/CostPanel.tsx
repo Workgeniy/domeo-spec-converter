@@ -1,9 +1,19 @@
-import { Alert, Badge, Button, FileButton, Group, Pagination, Paper, SegmentedControl, Stack, Table, Text, TextInput } from '@mantine/core'
+import { Alert, Badge, Button, FileButton, Group, Menu, Pagination, Paper, Progress, SegmentedControl, Stack, Table, Text, TextInput } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { IconDatabaseImport, IconFileDownload, IconRefresh } from '@tabler/icons-react'
-import { useEffect, useMemo, useState } from 'react'
+import { IconChevronDown, IconDatabaseImport, IconFileDownload, IconRefresh, IconWorldSearch } from '@tabler/icons-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { getPriceList, matchHistory, uploadPriceList, type MatchKind, type PriceListInfo } from '../api'
+import {
+  getInternetSearch,
+  getPriceList,
+  lookupInternet,
+  matchHistory,
+  uploadPriceList,
+  type HistoryPrice,
+  type InternetSearchInfo,
+  type MatchKind,
+  type PriceListInfo,
+} from '../api'
 import { useWorkspace, type HistoryChoice, type RowKey, type SummaryRow } from '../store'
 import { CostRowView } from './CostRow'
 import { formatMoney } from './format'
@@ -14,9 +24,12 @@ interface Props {
   downloading: boolean
 }
 
-type Mode = 'all' | 'unmatched' | 'noprice'
+type Mode = 'all' | 'unmatched' | 'nointernet' | 'noprice'
 const PAGE_SIZE = 50
-const COST_COLUMNS: (number | null)[] = [44, 90, null, 90, 260, 110, 120, 120, 120, 130, 120]
+// Поиск в интернете — десятки секунд на позицию; пачки маленькие, чтобы прогресс был виден
+// и обрыв связи не терял уже найденное.
+const LOOKUP_BATCH = 8
+const COST_COLUMNS: (number | null)[] = [44, 90, null, 90, 250, 140, 120, 120, 120, 130, 120]
 
 interface FlatRow {
   key: RowKey
@@ -29,10 +42,16 @@ export function CostPanel({ onDownload, downloading }: Props) {
   const updateRow = useWorkspace((s) => s.updateRow)
   const applyMatches = useWorkspace((s) => s.applyMatches)
   const chooseHistoryPrice = useWorkspace((s) => s.chooseHistoryPrice)
+  const applyInternet = useWorkspace((s) => s.applyInternet)
+  const chooseInternetPrice = useWorkspace((s) => s.chooseInternetPrice)
+  const chooseOffer = useWorkspace((s) => s.chooseOffer)
 
   const [priceList, setPriceList] = useState<PriceListInfo | null | undefined>(undefined)
+  const [internet, setInternet] = useState<InternetSearchInfo | null | undefined>(undefined)
   const [uploading, setUploading] = useState(false)
   const [matching, setMatching] = useState(false)
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
+  const cancelRef = useRef(false)
   const [filter, setFilter] = useState('')
   const [mode, setMode] = useState<Mode>('all')
   const [page, setPage] = useState(1)
@@ -44,6 +63,9 @@ export function CostPanel({ onDownload, downloading }: Props) {
         setPriceList(null)
         notifications.show({ color: 'red', title: 'Прайс закупки', message: e instanceof Error ? e.message : String(e) })
       })
+    getInternetSearch()
+      .then(setInternet)
+      .catch(() => setInternet(null))
   }, [])
 
   const rows = useMemo<FlatRow[]>(
@@ -53,25 +75,37 @@ export function CostPanel({ onDownload, downloading }: Props) {
 
   const stats = useMemo(() => {
     const kinds: Record<MatchKind | 'pending', number> = { exact: 0, fuzzy: 0, analog: 0, none: 0, pending: 0 }
+    const net = { found: 0, notFound: 0, error: 0, pending: 0 }
     let sum = 0
     let priced = 0
     for (const { row } of rows) {
       kinds[row.history?.kind ?? 'pending'] += 1
+      const status = row.internet?.status
+      if (!status) net.pending += 1
+      else if (status === 'found') net.found += 1
+      else if (status === 'error') net.error += 1
+      else net.notFound += 1
       if (row.price !== null && row.qty !== null) {
         sum += row.price * row.qty
         priced += 1
       }
     }
-    return { kinds, sum, priced }
+    return { kinds, net, sum, priced }
   }, [rows])
 
   const visible = useMemo(() => {
     const q = filter.trim().toLowerCase()
     return rows.filter(({ row }) => {
       if (mode === 'unmatched' && row.history && row.history.kind !== 'none' && row.history.kind !== 'analog') return false
+      if (mode === 'nointernet' && row.internet?.status === 'found') return false
       if (mode === 'noprice' && row.price !== null) return false
       if (!q) return true
-      return row.pos.toLowerCase().includes(q) || row.name.toLowerCase().includes(q) || row.description.toLowerCase().includes(q) || (row.history?.best?.name ?? '').toLowerCase().includes(q)
+      return (
+        row.pos.toLowerCase().includes(q) ||
+        row.name.toLowerCase().includes(q) ||
+        row.description.toLowerCase().includes(q) ||
+        (row.history?.best?.name ?? '').toLowerCase().includes(q)
+      )
     })
   }, [rows, filter, mode])
 
@@ -97,7 +131,7 @@ export function CostPanel({ onDownload, downloading }: Props) {
     setMatching(true)
     try {
       const items = rows.map((r) => ({ id: r.id, name: r.row.name, description: r.row.description }))
-      const merged: Record<string, import('../api').HistoryPrice> = {}
+      const merged: Record<string, HistoryPrice> = {}
       // Порциями, чтобы запрос не разрастался на больших объектах.
       for (let i = 0; i < items.length; i += 500) {
         Object.assign(merged, await matchHistory(items.slice(i, i + 500)))
@@ -110,14 +144,58 @@ export function CostPanel({ onDownload, downloading }: Props) {
     }
   }
 
+  const missingInternet = rows.filter((r) => !r.row.internet || r.row.internet.status === 'error')
+
+  async function searchInternet(scope: 'missing' | 'all') {
+    const targets = scope === 'all' ? rows : missingInternet
+    if (targets.length === 0) {
+      notifications.show({ color: 'blue', message: 'Все позиции уже искали в интернете' })
+      return
+    }
+    cancelRef.current = false
+    setProgress({ done: 0, total: targets.length })
+    let searches = 0
+    let stopped = false
+    try {
+      for (let i = 0; i < targets.length; i += LOOKUP_BATCH) {
+        if (cancelRef.current) {
+          stopped = true
+          break
+        }
+        const batch = targets.slice(i, i + LOOKUP_BATCH)
+        const lookups = await lookupInternet(
+          batch.map((r) => ({ id: r.id, name: r.row.name, description: r.row.description, unit: r.row.unit })),
+          scope === 'all',
+        )
+        applyInternet(lookups)
+        searches += Object.values(lookups).reduce((n, l) => n + (l.searches ?? 0), 0)
+        setProgress({ done: Math.min(i + batch.length, targets.length), total: targets.length })
+      }
+      notifications.show({
+        color: stopped ? 'yellow' : 'green',
+        title: stopped ? 'Поиск остановлен' : 'Поиск в интернете завершён',
+        message: `Поисковых запросов к модели: ${searches}`,
+      })
+    } catch (e) {
+      notifications.show({ color: 'red', title: 'Поиск в интернете прервался', message: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setProgress(null)
+      getInternetSearch()
+        .then(setInternet)
+        .catch(() => undefined)
+    }
+  }
+
   const matchedKeys = rows.filter((r) => r.row.history?.best).map((r) => r.key)
+  const internetKeys = rows.filter((r) => r.row.internet_price !== null && r.row.internet_price !== undefined).map((r) => r.key)
   const chooseAll = (which: HistoryChoice) => chooseHistoryPrice(matchedKeys, which)
+  const searchReady = internet?.configured === true && rows.length > 0 && progress === null
 
   return (
     <Stack gap="md">
       <Paper withBorder p="md">
         <Group justify="space-between" align="flex-start" wrap="wrap" gap="lg">
-          <div>
+          <div style={{ flex: 1, minWidth: 320 }}>
             <Text fw={700}>Прайс закупки (история 1С)</Text>
             {priceList === undefined && (
               <Text size="sm" c="dimmed">
@@ -136,6 +214,41 @@ export function CostPanel({ onDownload, downloading }: Props) {
                 {priceList.period_to ?? '?'} · собран {priceList.built_at}
               </Text>
             )}
+            <Text fw={700} mt="sm">
+              Цена из интернета на дату
+            </Text>
+            {internet === undefined && (
+              <Text size="sm" c="dimmed">
+                проверяем…
+              </Text>
+            )}
+            {internet === null && (
+              <Text size="sm" c="dimmed">
+                сервис недоступен
+              </Text>
+            )}
+            {internet && !internet.configured && (
+              <Text size="sm" c="dimmed">
+                Не настроен: на сервере ядра нужен ключ ANTHROPIC_API_KEY (локально — файл core/.env, на стенде — deploy/secrets.env).
+                Модель сама ищет предложения в интернете, читает страницы и возвращает цены со ссылками.
+              </Text>
+            )}
+            {internet?.configured && (
+              <Text size="sm" c="dimmed">
+                модель {internet.model} · в кэше {internet.cached} позиций · найденное свежее {internet.ttl_days} дн. заново не ищется
+              </Text>
+            )}
+            {progress && (
+              <Group gap="sm" mt="xs" wrap="nowrap">
+                <Progress value={(progress.done / progress.total) * 100} w={220} animated />
+                <Text size="sm">
+                  {progress.done} из {progress.total}
+                </Text>
+                <Button size="compact-xs" variant="subtle" color="red" onClick={() => (cancelRef.current = true)}>
+                  Остановить
+                </Button>
+              </Group>
+            )}
           </div>
           <Group>
             <FileButton onChange={upload} accept=".xlsx,.xlsm">
@@ -148,6 +261,25 @@ export function CostPanel({ onDownload, downloading }: Props) {
             <Button leftSection={<IconRefresh size={16} />} loading={matching} disabled={!priceList || rows.length === 0} onClick={matchAll}>
               Сопоставить с историей
             </Button>
+            <Menu shadow="md" width={320} transitionProps={{ duration: 0 }}>
+              <Menu.Target>
+                <Button
+                  variant="light"
+                  leftSection={<IconWorldSearch size={16} />}
+                  rightSection={<IconChevronDown size={14} />}
+                  loading={progress !== null}
+                  disabled={!searchReady}
+                >
+                  Найти цены в интернете
+                </Button>
+              </Menu.Target>
+              <Menu.Dropdown>
+                <Menu.Item onClick={() => searchInternet('missing')} disabled={missingInternet.length === 0}>
+                  Только там, где ещё не искали ({missingInternet.length})
+                </Menu.Item>
+                <Menu.Item onClick={() => searchInternet('all')}>Все позиции заново ({rows.length})</Menu.Item>
+              </Menu.Dropdown>
+            </Menu>
           </Group>
         </Group>
       </Paper>
@@ -172,6 +304,14 @@ export function CostPanel({ onDownload, downloading }: Props) {
                 не сопоставлено: {stats.kinds.pending}
               </Badge>
             )}
+            <Badge variant="light" color="blue">
+              интернет: {stats.net.found}
+            </Badge>
+            {stats.net.error > 0 && (
+              <Badge variant="light" color="red">
+                ошибки поиска: {stats.net.error}
+              </Badge>
+            )}
             <Badge variant="outline">
               с ценой: {stats.priced} из {rows.length}
             </Badge>
@@ -183,6 +323,9 @@ export function CostPanel({ onDownload, downloading }: Props) {
             <Text size="sm" c="dimmed">
               Взять везде:
             </Text>
+            <Button size="xs" variant="light" disabled={internetKeys.length === 0} onClick={() => chooseInternetPrice(internetKeys)}>
+              интернет
+            </Button>
             <Button size="xs" variant="light" disabled={matchedKeys.length === 0} onClick={() => chooseAll('min')}>
               минимум
             </Button>
@@ -201,8 +344,9 @@ export function CostPanel({ onDownload, downloading }: Props) {
           </Group>
         </Group>
         <Text size="xs" c="dimmed" mt="sm">
-          Три цены на позицию: интернет на дату (следующий шаг), минимум и максимум по истории закупок. Щелчок по цене берёт её в базовую;
-          базовую можно и вписать руками. Из базовой цены считается КП. Наведите на сопоставление — увидите кандидатов и последние покупки.
+          Три цены на позицию: интернет на дату, минимум и максимум по истории закупок. Щелчок по цене берёт её в базовую; базовую можно и
+          вписать руками. Из базовой цены считается КП. Наведите на сопоставление или цену из интернета — увидите кандидатов, покупки и
+          найденные предложения со ссылками; щелчок по предложению делает его ценой из интернета для позиции.
         </Text>
       </Paper>
 
@@ -221,6 +365,7 @@ export function CostPanel({ onDownload, downloading }: Props) {
           data={[
             { value: 'all', label: `Все (${rows.length})` },
             { value: 'unmatched', label: 'Аналог / не найдено' },
+            { value: 'nointernet', label: 'Без цены из интернета' },
             { value: 'noprice', label: 'Без цены' },
           ]}
         />
@@ -230,7 +375,7 @@ export function CostPanel({ onDownload, downloading }: Props) {
         </Text>
       </Group>
 
-      <TableScroller minWidth={1560}>
+      <TableScroller minWidth={1580}>
         <Table highlightOnHover withTableBorder withColumnBorders fz="sm" layout="fixed" verticalSpacing={4}>
           <colgroup>
             {COST_COLUMNS.map((w, i) => (
@@ -254,7 +399,16 @@ export function CostPanel({ onDownload, downloading }: Props) {
           </Table.Thead>
           <Table.Tbody>
             {pageRows.map((r, i) => (
-              <CostRowView key={r.id} number={(currentPage - 1) * PAGE_SIZE + i + 1} row={r.row} rowKey={r.key} onChange={updateRow} onChoose={chooseHistoryPrice} />
+              <CostRowView
+                key={r.id}
+                number={(currentPage - 1) * PAGE_SIZE + i + 1}
+                row={r.row}
+                rowKey={r.key}
+                onChange={updateRow}
+                onChoose={chooseHistoryPrice}
+                onChooseInternet={chooseInternetPrice}
+                onOffer={chooseOffer}
+              />
             ))}
             {pageRows.length === 0 && (
               <Table.Tr>

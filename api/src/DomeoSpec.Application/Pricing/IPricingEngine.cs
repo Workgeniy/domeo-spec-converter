@@ -16,4 +16,10 @@ public interface IPricingEngine
 
     /// <summary>Сопоставить позиции с прайсом: id позиции → результат.</summary>
     Task<IReadOnlyDictionary<string, HistoryPrice>> MatchAsync(IReadOnlyList<MatchRequestItem> items, CancellationToken ct);
+
+    /// <summary>Состояние поиска цен в интернете (настроен ли ключ, модель, размер кэша).</summary>
+    Task<InternetSearchInfo> GetInternetSearchAsync(CancellationToken ct);
+
+    /// <summary>Найти цены в интернете на дату: id позиции → результат. refresh — не глядя на кэш.</summary>
+    Task<IReadOnlyDictionary<string, InternetLookup>> LookupInternetAsync(IReadOnlyList<MatchRequestItem> items, bool refresh, CancellationToken ct);
 }

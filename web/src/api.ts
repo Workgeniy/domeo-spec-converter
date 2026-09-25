@@ -64,6 +64,35 @@ export interface HistoryPrice {
   matched_at: string
 }
 
+/** Одно предложение из интернета — где и почём нашлось. */
+export interface InternetOffer {
+  title: string
+  url: string
+  shop: string
+  /** За единицу, руб. с НДС. */
+  price: number
+  /** Не та же позиция, а похожая. */
+  analog: boolean
+  note: string
+}
+
+export type InternetStatus = 'found' | 'not_found' | 'error'
+
+/** Результат поиска цены в интернете на дату. */
+export interface InternetLookup {
+  status: InternetStatus
+  query: string
+  /** Дата, на которую найдена цена (ГГГГ-ММ-ДД). */
+  looked_up_at: string
+  offers: InternetOffer[]
+  /** Рекомендуемая цена — типичная среди подходящих предложений. */
+  price: number | null
+  comment: string
+  provider: string
+  /** Сколько поисковых запросов ушло — для оценки расходов. */
+  searches: number
+}
+
 /** Откуда взята базовая цена позиции. */
 export type PriceSource = '' | 'manual' | 'history_min' | 'history_max' | 'history_median' | 'history_last' | 'internet'
 
@@ -83,8 +112,11 @@ export interface SummaryItem {
   price_source: PriceSource
   /** Сопоставление с историей закупок; null — ещё не сопоставляли. */
   history: HistoryPrice | null
-  /** Цена из интернета на дату (следующий шаг). */
+  /** Поиск в интернете: предложения и рекомендуемая цена; null — ещё не искали. */
+  internet: InternetLookup | null
+  /** Цена из интернета на дату — выбранное предложение. */
   internet_price: number | null
+  /** Ссылка на выбранное предложение. */
   internet_source: string
   internet_date: string
   /** Подлежит монтажу/пусконаладке → лист «1» (Приложение №1.1), иначе инвентарь → лист «2». */
@@ -169,6 +201,17 @@ export interface MatchRequestItem {
   id: string
   name: string
   description: string
+  /** Для поиска в интернете: цена нужна за эту единицу. */
+  unit?: string
+}
+
+/** Состояние поиска цен в интернете: настроен ли ключ, чем ищем, сколько в кэше. */
+export interface InternetSearchInfo {
+  configured: boolean
+  provider: string
+  model: string
+  cached: number
+  ttl_days: number
 }
 
 export interface Health {
@@ -229,6 +272,19 @@ export function matchHistory(items: MatchRequestItem[]): Promise<Record<string, 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ items }),
   }).then((r) => readData<{ matches: Record<string, HistoryPrice> }>(r).then((d) => d.matches))
+}
+
+export function getInternetSearch(): Promise<InternetSearchInfo> {
+  return fetch('/api/specifications/internet').then((r) => readData<InternetSearchInfo>(r))
+}
+
+/** Поиск цен пачкой (до 50 позиций); refresh — искать заново, не глядя на кэш. Ждать приходится долго. */
+export function lookupInternet(items: MatchRequestItem[], refresh = false): Promise<Record<string, InternetLookup>> {
+  return fetch('/api/specifications/internet/lookup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items, refresh }),
+  }).then((r) => readData<{ lookups: Record<string, InternetLookup> }>(r).then((d) => d.lookups))
 }
 
 export async function exportExcel(doc: ParsedDocument): Promise<{ blob: Blob; fileName: string }> {

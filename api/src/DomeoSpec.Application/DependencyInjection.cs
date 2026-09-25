@@ -13,6 +13,7 @@ public static class DependencyInjection
         services.AddScoped<ExportSpecificationHandler>();
         services.AddScoped<UploadPriceListHandler>();
         services.AddScoped<MatchPriceListHandler>();
+        services.AddScoped<LookupInternetHandler>();
         return services;
     }
 }
