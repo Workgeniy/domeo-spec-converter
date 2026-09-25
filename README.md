@@ -102,6 +102,19 @@ deploy/deploy.sh
 `testvm` из `~/.ssh/config`), `EDGE_PORT` (8090).
 Логи: `ssh testvm 'cd ~/domeo/spec && docker compose logs --tail 100'`.
 
+**Обновление стенда — только выкатом.** На ВМ работают образы, собранные в момент
+`deploy.sh`; изменения в репозитории туда сами не попадают. Порядок: закоммитить →
+`bash deploy/deploy.sh` (одна-две минуты). Автовыкат по push в `main` можно добавить
+GitHub Actions по образцу release.yml дизайнерского бэкенда — понадобится SSH-ключ ВМ в
+секретах репозитория.
+
+**Публичный адрес** https://testdesign.domeohome.ru/spec/ — это stage-nginx дизайнерской
+платформы на той же ВМ (`~/domeo/stage/nginx.conf`, не в этом репозитории): `location /spec/`
+проксирует на наш край `172.18.0.1:8090`, `/spec/assets/` — статика, `/api/specifications/`
+— ручки приложения (лимит 100 МБ, тайм-аут 600 с). Поэтому все ручки приложения живут под
+`/api/specifications/*`, включая health; `/api/health` на общем домене принадлежит другому
+сервису.
+
 ## OCR для сканов
 
 Нужен Tesseract с русским языком: Windows — установщик UB-Mannheim

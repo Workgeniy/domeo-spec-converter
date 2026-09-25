@@ -18,10 +18,12 @@ public sealed class SpecificationsApiTests : IClassFixture<ApiFactory>
         _client = factory.CreateClient();
     }
 
-    [Fact]
-    public async Task Health_reports_engine_state()
+    [Theory]
+    [InlineData("/api/health")]
+    [InlineData("/api/specifications/health")]
+    public async Task Health_reports_engine_state(string path)
     {
-        var body = await _client.GetFromJsonAsync<JsonNode>("/api/health");
+        var body = await _client.GetFromJsonAsync<JsonNode>(path);
         Assert.True(body!["success"]!.GetValue<bool>());
         Assert.Equal("ok", body["data"]!["status"]!.GetValue<string>());
         Assert.True(body["data"]!["engine"]!["available"]!.GetValue<bool>());

@@ -130,8 +130,10 @@ async function readData<T>(response: Response): Promise<T> {
   return body.data
 }
 
+// Под /api/specifications/, а не /api/health: на общем домене (testdesign…/spec/) край отдаёт
+// приложению только этот префикс, а /api/health там отвечает другой сервис.
 export function getHealth(): Promise<Health> {
-  return fetch('/api/health').then((r) => readData<Health>(r))
+  return fetch('/api/specifications/health').then((r) => readData<Health>(r))
 }
 
 export function parsePdf(file: File): Promise<ParsedDocument> {

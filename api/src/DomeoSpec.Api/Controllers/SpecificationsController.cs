@@ -39,11 +39,15 @@ public sealed class SpecificationsController : ControllerBase
 }
 
 [ApiController]
-[Route("api/health")]
 public sealed class HealthController(IParsingEngine engine) : ControllerBase
 {
-    /// <summary>Состояние API и ядра разбора (доступность, OCR).</summary>
-    [HttpGet]
+    /// <summary>
+    /// Состояние API и ядра разбора (доступность, OCR). Два адреса: короткий — для проб на
+    /// стенде, под /api/specifications/ — для фронта: на общем домене под путём /spec/ край
+    /// отдаёт приложению только /api/specifications/*, а /api/health там принадлежит другому сервису.
+    /// </summary>
+    [HttpGet("api/health")]
+    [HttpGet("api/specifications/health")]
     public async Task<ActionResult<ApiResponse<HealthDto>>> Get(CancellationToken ct)
     {
         var engineHealth = await engine.GetHealthAsync(ct);
