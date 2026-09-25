@@ -311,6 +311,9 @@ class InternetPriceService:
             entry = self._cache.get(self.cache_key(name, description))
         if entry is None or not entry.looked_up_at:
             return None
+        # Найденное другим провайдером (заглушкой до появления ключа) не годится.
+        if self.provider is not None and entry.provider != self.provider.name:
+            return None
         try:
             age = (date.fromisoformat(today) - date.fromisoformat(entry.looked_up_at)).days
         except ValueError:

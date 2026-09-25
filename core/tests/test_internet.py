@@ -95,6 +95,13 @@ def test_service_caches_dedupes_and_does_not_cache_errors(tmp_path: Path) -> Non
     assert reloaded.cached("Стул детский", "регулируемый") is not None
     assert reloaded.cached("Стул детский", "регулируемый", today="2027-01-01") is None  # протухло
 
+    class OtherProvider(FakeProvider):
+        name = "other"
+
+    other = InternetPriceService(OtherProvider(), data_dir=tmp_path)
+    other.load()
+    assert other.cached("Стул детский", "регулируемый") is None  # найденное другим провайдером (заглушкой) не годится
+
 
 def test_internet_endpoints(tmp_path: Path) -> None:
     saved = (internet_prices.provider, internet_prices.data_dir, internet_prices.path)
