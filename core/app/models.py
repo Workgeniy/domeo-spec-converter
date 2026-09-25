@@ -336,12 +336,14 @@ class SupplierIndexInfo(BaseModel):
     offers: int = 0
     updated_at: str = ""
     autocrawl_pages: int = 300  # 0 — найденные автопоиском сайты не обходить
+    min_shops: int = 3  # искать в интернете, пока по позиции меньше стольких магазинов
     queued: int = 0  # сколько сайтов ждёт обхода
     search_engine: str = ""  # чем ищем в интернете; пусто — автопоиск выключен
 
 
 class SupplierSettings(BaseModel):
     autocrawl_pages: int = Field(default=300, ge=0, le=50_000)
+    min_shops: int = Field(default=3, ge=1, le=10)
 
 
 class SupplierSample(BaseModel):

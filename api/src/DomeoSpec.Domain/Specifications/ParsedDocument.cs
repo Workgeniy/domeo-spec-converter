@@ -165,12 +165,14 @@ public sealed record SupplierIndexInfo
     public string UpdatedAt { get; init; } = "";
     /// <summary>Сколько страниц обходить у сайтов, найденных автопоиском; 0 — не обходить.</summary>
     public int AutocrawlPages { get; init; } = 300;
+    /// <summary>Искать в интернете, пока по позиции меньше стольких разных магазинов.</summary>
+    public int MinShops { get; init; } = 3;
     public int Queued { get; init; }
     /// <summary>Чем ищем в интернете; пусто — автопоиск выключен.</summary>
     public string SearchEngine { get; init; } = "";
 }
 
-public sealed record SupplierSettings(int AutocrawlPages);
+public sealed record SupplierSettings(int AutocrawlPages = 300, int MinShops = 3);
 
 /// <summary>
 /// Параметры КП — приложений к договору по образцу заказчика. Правила цены применяются поверх

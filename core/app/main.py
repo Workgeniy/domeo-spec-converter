@@ -96,8 +96,9 @@ def suppliers_info() -> SupplierIndexInfo:
 
 @app.put("/api/suppliers/settings", response_model=SupplierIndexInfo)
 def suppliers_settings(body: SupplierSettings) -> SupplierIndexInfo:
-    """Сколько страниц обходить у сайтов, найденных автопоиском (0 — не обходить)."""
-    return supplier_index.set_settings(body.autocrawl_pages)
+    """Глубина обхода найденных автопоиском сайтов (0 — не обходить) и сколько магазинов по
+    позиции считать достаточным, чтобы не ходить в интернет."""
+    return supplier_index.set_settings(body.autocrawl_pages, body.min_shops)
 
 
 @app.post("/api/suppliers", response_model=Supplier)

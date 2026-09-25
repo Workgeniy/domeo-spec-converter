@@ -17,12 +17,15 @@ public sealed class SuppliersController(IPricingEngine engine) : ControllerBase
         return ApiResponse<SupplierIndexInfo>.Ok(await engine.GetSuppliersAsync(ct));
     }
 
-    /// <summary>Сколько страниц обходить у сайтов, найденных автопоиском (0 — не обходить).</summary>
+    /// <summary>Глубина обхода найденных автопоиском сайтов (0 — не обходить) и сколько магазинов по
+    /// позиции считать достаточным, чтобы не ходить в интернет.</summary>
     [HttpPut("settings")]
     public async Task<ActionResult<ApiResponse<SupplierIndexInfo>>> Settings([FromBody] SupplierSettings body, CancellationToken ct)
     {
         if (body.AutocrawlPages is < 0 or > 50_000)
             throw new ValidationFailedException("Число страниц — от 0 до 50 000.");
+        if (body.MinShops is < 1 or > 10)
+            throw new ValidationFailedException("Число магазинов — от 1 до 10.");
         return ApiResponse<SupplierIndexInfo>.Ok(await engine.UpdateSupplierSettingsAsync(body, ct));
     }
 

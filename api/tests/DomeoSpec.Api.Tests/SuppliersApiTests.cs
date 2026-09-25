@@ -71,15 +71,19 @@ public sealed class SuppliersApiTests : IClassFixture<ApiFactory>
     [Fact]
     public async Task Settings_are_validated_and_returned_with_index_info()
     {
-        var ok = await _client.PutAsJsonAsync("/api/specifications/suppliers/settings", new { autocrawl_pages = 120 });
+        var ok = await _client.PutAsJsonAsync("/api/specifications/suppliers/settings", new { autocrawl_pages = 120, min_shops = 4 });
         Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
         var info = (await ok.Content.ReadFromJsonAsync<JsonNode>())!["data"]!;
         Assert.Equal(120, info["autocrawl_pages"]!.GetValue<int>());
+        Assert.Equal(4, info["min_shops"]!.GetValue<int>());
         Assert.Equal("fake-search", info["search_engine"]!.GetValue<string>());
 
         var bad = await _client.PutAsJsonAsync("/api/specifications/suppliers/settings", new { autocrawl_pages = -5 });
         Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+        var badShops = await _client.PutAsJsonAsync("/api/specifications/suppliers/settings", new { autocrawl_pages = 100, min_shops = 0 });
+        Assert.Equal(HttpStatusCode.BadRequest, badShops.StatusCode);
         _factory.Pricing.AutocrawlPages = 300;
+        _factory.Pricing.MinShops = 3;
     }
 
     [Fact]

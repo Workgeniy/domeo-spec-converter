@@ -252,9 +252,11 @@ class SupplierIndexProvider:
 
 
 class AutoSearchProvider:
-    """Индекс поставщиков плюс автопоиск: если в индексе нет точного совпадения, позиция
-    ищется в интернете, найденные магазины и цены пополняют индекс, и ответ берётся уже
-    из него. Бесплатно: поисковик без ключа, страницы читаются по разметке."""
+    """Индекс поставщиков плюс автопоиск: пока по позиции в индексе меньше ``min_shops``
+    разных магазинов с той же позицией, она ищется в интернете, найденные магазины и цены
+    пополняют индекс, и ответ берётся уже из него — так у оператора картина рынка, а не
+    одна цена. Бесплатно: поисковик без ключа, страницы читаются по разметке; повторный
+    запрос той же позиции в течение недели идёт из кэша поиска."""
 
     name = "auto"
     cacheable = False  # кэш есть у самого веб-поиска (по запросу), индекс — локальный
@@ -265,26 +267,26 @@ class AutoSearchProvider:
 
     @property
     def model(self) -> str:
-        engine = f"автопоиск через {self.web.engine.name}" if self.web is not None else "автопоиск выключен"
+        engine = f"автопоиск через {self.web.engine.name}, пока меньше {self.index.min_shops} магазинов" if self.web is not None else "автопоиск выключен"
         return f"{self.index.description}; {engine}"
 
     def lookup(self, name: str, description: str, unit: str, today: str) -> InternetLookup:
-        base = self.index.lookup(name, description, unit, today)
+        ranked = self.index.rank(name)
+        base = self.index.build_lookup(ranked, name, description, today)
         base.provider = self.name
-        if base.status == "found" and base.price is not None:
-            return base  # в индексе уже есть та же позиция
-        if self.web is None:
-            return base
+        shops_before = self.index.matched_shops(ranked)
+        if self.web is None or shops_before >= self.index.min_shops:
+            return base  # магазинов по позиции уже достаточно — интернет не нужен
         try:
-            pages = self.web.find(name, description, unit, today)
+            self.web.find(name, description, unit, today)  # найденное само ложится в индекс
         except Exception as exc:  # noqa: BLE001 — сбой поисковика не должен ронять пачку
             base.comment = f"{base.comment}; автопоиск не ответил: {str(exc)[:120]}".strip("; ")
             return base
-        if not any(page.offers for page in pages):
-            base.comment = f"{base.comment}; автопоиск в интернете цен не нашёл".strip("; ")
-            return base
-        result = self.index.lookup(name, description, unit, today)  # индекс уже пополнен найденным
+        ranked = self.index.rank(name)
+        result = self.index.build_lookup(ranked, name, description, today)
         result.provider = self.name
+        if self.index.matched_shops(ranked) <= shops_before:
+            result.comment = f"{result.comment}; автопоиск в интернете новых магазинов не нашёл".strip("; ")
         return result
 
 

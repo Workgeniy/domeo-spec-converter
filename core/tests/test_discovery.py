@@ -73,7 +73,7 @@ def test_helpers() -> None:
 
 def test_web_search_fills_index_and_caches(tmp_path: Path) -> None:
     index = SupplierIndex(data_dir=tmp_path)
-    index.set_settings(0)  # без автообхода
+    index.set_settings(autocrawl_pages=0)  # без автообхода
     engine = FakeEngine()
     requests: list[str] = []
     web = WebPriceSearch(engine, index, data_dir=tmp_path, client=_client(requests), page_delay=0)
@@ -99,21 +99,31 @@ def test_web_search_fills_index_and_caches(tmp_path: Path) -> None:
     assert reloaded.cached_queries == 1
 
 
-def test_auto_provider_uses_index_first_then_web(tmp_path: Path) -> None:
+def test_auto_provider_searches_web_until_enough_shops(tmp_path: Path) -> None:
     index = SupplierIndex(data_dir=tmp_path)
-    index.set_settings(0)
+    index.set_settings(autocrawl_pages=0, min_shops=3)
     engine = FakeEngine()
     web = WebPriceSearch(engine, index, data_dir=tmp_path, client=_client([]), page_delay=0)
     provider = AutoSearchProvider(index, web)
+    assert "меньше 3 магазинов" in provider.model
 
     lookup = provider.lookup("Стул детский регулируемый по высоте №1-№3", "", "шт.", "2026-09-25")
     assert lookup.status == "found" and lookup.provider == "auto" and lookup.price == 1420  # медиана 1350 и 1490
     assert sorted(o.shop for o in lookup.offers) == ["Мебель-Сад", "Парта-Плюс"]
     assert engine.queries == ["Стул детский регулируемый по высоте №1-№3 купить"]
 
-    # Та же позиция снова — индекс отвечает сам, поисковик не нужен.
+    # Магазинов всё ещё два (< 3): поисковик нужен, но тот же запрос идёт из кэша поиска.
     again = provider.lookup("Стул детский регулируемый по высоте №1-№3", "", "шт.", "2026-09-25")
-    assert again.price == 1420 and len(engine.queries) == 1
+    assert again.price == 1420 and len(engine.queries) == 1 and "новых магазинов не нашёл" in again.comment
+
+    # Свежий кэш поиска: при пороге 3 поисковик спрашивают снова, при пороге 2 — уже нет.
+    fresh = WebPriceSearch(engine, index, data_dir=tmp_path / "fresh", client=_client([]), page_delay=0)
+    AutoSearchProvider(index, fresh).lookup("Стул детский регулируемый по высоте №1-№3", "", "шт.", "2026-09-25")
+    assert len(engine.queries) == 2
+    index.set_settings(min_shops=2)
+    fresh2 = WebPriceSearch(engine, index, data_dir=tmp_path / "fresh2", client=_client([]), page_delay=0)
+    enough = AutoSearchProvider(index, fresh2).lookup("Стул детский регулируемый по высоте №1-№3", "", "шт.", "2026-09-25")
+    assert len(engine.queries) == 2 and enough.price == 1420 and "автопоиск" not in enough.comment
 
     # Ничего не нашлось ни в индексе, ни в интернете — честное «не найдено» с пояснением.
     class EmptyEngine:
@@ -148,7 +158,7 @@ class FakeCrawler:
 def test_discovered_supplier_is_queued_for_crawl_and_keeps_search_offers(tmp_path: Path) -> None:
     index = SupplierIndex(data_dir=tmp_path)
     index._crawler_factory = lambda **kw: FakeCrawler(**kw)
-    index.set_settings(200)
+    index.set_settings(autocrawl_pages=200)
     web = WebPriceSearch(FakeEngine(), index, data_dir=tmp_path, client=_client([]), page_delay=0)
     web.find("Стул детский регулируемый по высоте №1-№3", "", "шт.", "2026-09-25")
     for supplier in index.info().suppliers:
@@ -162,15 +172,17 @@ def test_discovered_supplier_is_queued_for_crawl_and_keeps_search_offers(tmp_pat
 
 
 def test_settings_endpoint_and_info(tmp_path: Path) -> None:
-    saved = (supplier_index.dir, supplier_index.autocrawl_pages)
+    saved = (supplier_index.dir, supplier_index.autocrawl_pages, supplier_index.min_shops)
     supplier_index.dir = tmp_path / "suppliers"
     try:
-        response = client.put("/api/suppliers/settings", json={"autocrawl_pages": 120})
-        assert response.status_code == 200 and response.json()["autocrawl_pages"] == 120
+        response = client.put("/api/suppliers/settings", json={"autocrawl_pages": 120, "min_shops": 4})
+        assert response.status_code == 200 and response.json()["autocrawl_pages"] == 120 and response.json()["min_shops"] == 4
         assert client.put("/api/suppliers/settings", json={"autocrawl_pages": -1}).status_code == 422
+        assert client.put("/api/suppliers/settings", json={"min_shops": 0}).status_code == 422
         info = client.get("/api/suppliers").json()
-        assert info["autocrawl_pages"] == 120 and "search_engine" in info
-        assert json.loads((tmp_path / "suppliers" / "index.json").read_text(encoding="utf-8"))["autocrawl_pages"] == 120
+        assert info["autocrawl_pages"] == 120 and info["min_shops"] == 4 and "search_engine" in info
+        saved_file = json.loads((tmp_path / "suppliers" / "index.json").read_text(encoding="utf-8"))
+        assert saved_file["autocrawl_pages"] == 120 and saved_file["min_shops"] == 4
         assert internet_prices.provider is not None and internet_prices.provider.name in ("auto", "suppliers", "fake", "claude-web-search")
     finally:
-        supplier_index.dir, supplier_index.autocrawl_pages = saved
+        supplier_index.dir, supplier_index.autocrawl_pages, supplier_index.min_shops = saved

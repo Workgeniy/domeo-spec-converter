@@ -80,6 +80,7 @@ public sealed class FakePricing : IPricingEngine
 
     public List<Supplier> Suppliers { get; } = [];
     public int AutocrawlPages { get; set; } = 300;
+    public int MinShops { get; set; } = 3;
 
     public Task<SupplierIndexInfo> GetSuppliersAsync(CancellationToken ct) =>
         Task.FromResult(new SupplierIndexInfo
@@ -88,12 +89,14 @@ public sealed class FakePricing : IPricingEngine
             Offers = Suppliers.Sum(s => s.Offers),
             UpdatedAt = Suppliers.Count > 0 ? "2026-09-25" : "",
             AutocrawlPages = AutocrawlPages,
+            MinShops = MinShops,
             SearchEngine = "fake-search",
         });
 
     public Task<SupplierIndexInfo> UpdateSupplierSettingsAsync(SupplierSettings settings, CancellationToken ct)
     {
         AutocrawlPages = settings.AutocrawlPages;
+        MinShops = settings.MinShops;
         return GetSuppliersAsync(ct);
     }
 

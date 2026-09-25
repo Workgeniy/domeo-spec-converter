@@ -122,6 +122,8 @@ export function SuppliersPanel() {
   const [adding, setAdding] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [autocrawl, setAutocrawl] = useState<number | string>(300)
+  const [minShops, setMinShops] = useState<number | string>(3)
+  const [settingsTouched, setSettingsTouched] = useState(false)
   const [savingSettings, setSavingSettings] = useState(false)
   const timer = useRef<number | null>(null)
 
@@ -129,19 +131,30 @@ export function SuppliersPanel() {
     try {
       const next = await getSuppliers()
       setInfo(next)
-      setAutocrawl((current) => (current === 300 ? next.autocrawl_pages : current))
+      if (!settingsTouched) {
+        setAutocrawl(next.autocrawl_pages)
+        setMinShops(next.min_shops)
+      }
     } catch (e) {
       notifications.show({ color: 'red', title: 'Поставщики', message: message(e) })
     }
-  }, [])
+  }, [settingsTouched])
 
   async function saveSettings() {
     setSavingSettings(true)
     try {
-      const next = await updateSupplierSettings({ autocrawl_pages: typeof autocrawl === 'number' ? autocrawl : 0 })
+      const next = await updateSupplierSettings({
+        autocrawl_pages: typeof autocrawl === 'number' ? autocrawl : 0,
+        min_shops: typeof minShops === 'number' ? minShops : 3,
+      })
       setInfo(next)
       setAutocrawl(next.autocrawl_pages)
-      notifications.show({ color: 'green', message: next.autocrawl_pages > 0 ? `Найденные сайты будут обходиться, до ${next.autocrawl_pages} страниц` : 'Найденные сайты обходиться не будут' })
+      setMinShops(next.min_shops)
+      setSettingsTouched(false)
+      notifications.show({
+        color: 'green',
+        message: `Интернет опрашивается, пока меньше ${next.min_shops} магазинов; найденные сайты ${next.autocrawl_pages > 0 ? `обходятся до ${next.autocrawl_pages} страниц` : 'не обходятся'}`,
+      })
     } catch (e) {
       notifications.show({ color: 'red', title: 'Не удалось сохранить настройку', message: message(e) })
     } finally {
@@ -213,24 +226,40 @@ export function SuppliersPanel() {
           {info ? `${info.offers} позиций у ${suppliers.length} поставщиков${info.updated_at ? ` · обновлено ${info.updated_at}` : ''}` : 'загружаем…'}
         </Text>
         <Text size="xs" c="dimmed" mt="xs">
-          Поставщики появляются здесь двумя путями. Автопоиск: при поиске цен во вкладке «Себестоимость» позиция, которой нет в индексе,
-          ищется в интернете{info?.search_engine ? ` (${info.search_engine}, без ключей и оплаты)` : ''}, найденные магазины и их цены
-          попадают сюда сами, а их каталоги встают в очередь на обход. Вручную: сайт или прайс-лист xlsx (нужны колонки с наименованием и
+          Поставщики появляются здесь двумя путями. Автопоиск: при поиске цен во вкладке «Себестоимость» позиция, по которой в индексе
+          меньше заданного числа магазинов, ищется в интернете{info?.search_engine ? ` (${info.search_engine}, без ключей и оплаты)` : ''},
+          найденные магазины и их цены попадают сюда сами, а их каталоги встают в очередь на обход. Вручную: сайт или прайс-лист xlsx (нужны колонки с наименованием и
           ценой, шапку найдём сами). По сайту ядро ищет фид YML, потом карту сайта, потом идёт по ссылкам; цену берёт из разметки страниц.
           Не чаще двух запросов в секунду, robots.txt уважается. Сайты без разметки цен обходом не берутся — для них прайс-лист.
         </Text>
         <Group mt="sm" align="flex-end" wrap="wrap">
           <NumberInput
-            label="Обходить найденные автопоиском сайты, страниц (0 — не обходить)"
+            label="Искать в интернете, пока по позиции меньше магазинов"
+            description="Сколько разных магазинов считать картиной рынка"
+            value={minShops}
+            onChange={(v) => {
+              setMinShops(typeof v === 'number' ? v : String(v))
+              setSettingsTouched(true)
+            }}
+            min={1}
+            max={10}
+            w={300}
+          />
+          <NumberInput
+            label="Обходить найденные автопоиском сайты, страниц"
+            description="0 — не обходить, только страницы из поиска"
             value={autocrawl}
-            onChange={(v) => setAutocrawl(typeof v === 'number' ? v : String(v))}
+            onChange={(v) => {
+              setAutocrawl(typeof v === 'number' ? v : String(v))
+              setSettingsTouched(true)
+            }}
             min={0}
             max={50000}
             step={100}
-            w={360}
+            w={300}
             hideControls
           />
-          <Button variant="default" loading={savingSettings} disabled={!info || autocrawl === info.autocrawl_pages} onClick={saveSettings}>
+          <Button variant="default" loading={savingSettings} disabled={!info || !settingsTouched} onClick={saveSettings}>
             Сохранить
           </Button>
           {info && info.queued > 0 && (

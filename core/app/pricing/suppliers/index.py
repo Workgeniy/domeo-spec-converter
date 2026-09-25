@@ -33,6 +33,7 @@ MATCH_THRESHOLD = 0.6  # с этой оценки считаем, что пре�
 ANALOG_THRESHOLD = 0.45  # ниже — не показываем даже как похожее (одно общее слово из трёх — ещё не похоже)
 OFFERS_SHOWN = 6
 DEFAULT_AUTOCRAWL_PAGES = 300
+DEFAULT_MIN_SHOPS = 3  # столько разных магазинов по позиции считаем «картиной рынка»
 
 
 def _today() -> str:
@@ -96,6 +97,7 @@ class SupplierIndex:
         self.offers: dict[str, list[SupplierOffer]] = {}
         self.updated_at = ""
         self.autocrawl_pages = DEFAULT_AUTOCRAWL_PAGES
+        self.min_shops = DEFAULT_MIN_SHOPS
         self.search_engine = ""  # название движка автопоиска — для сводки
         self._matcher = OfferMatcher()
         self._lock = threading.RLock()
@@ -116,6 +118,7 @@ class SupplierIndex:
         with self._lock:
             self.updated_at = raw.get("updated_at", "")
             self.autocrawl_pages = int(raw.get("autocrawl_pages", DEFAULT_AUTOCRAWL_PAGES))
+            self.min_shops = int(raw.get("min_shops", DEFAULT_MIN_SHOPS))
             for item in raw.get("suppliers", []):
                 supplier = Supplier.model_validate(item)
                 if supplier.status == "running":  # обход прервался перезапуском сервиса
@@ -132,7 +135,12 @@ class SupplierIndex:
         with self._save_lock:
             (self.dir / "offers").mkdir(parents=True, exist_ok=True)
             with self._lock:
-                payload = {"updated_at": self.updated_at, "autocrawl_pages": self.autocrawl_pages, "suppliers": [s.model_dump() for s in self.suppliers.values()]}
+                payload = {
+                    "updated_at": self.updated_at,
+                    "autocrawl_pages": self.autocrawl_pages,
+                    "min_shops": self.min_shops,
+                    "suppliers": [s.model_dump() for s in self.suppliers.values()],
+                }
                 snapshot = {sid: [o.model_dump() for o in offers] for sid, offers in self.offers.items()}
             _write_json(self.dir / "index.json", payload)
             for sid, offers in snapshot.items():
@@ -148,13 +156,17 @@ class SupplierIndex:
                 offers=sum(len(o) for o in self.offers.values()),
                 updated_at=self.updated_at,
                 autocrawl_pages=self.autocrawl_pages,
+                min_shops=self.min_shops,
                 queued=len(self._queue),
                 search_engine=self.search_engine,
             )
 
-    def set_settings(self, autocrawl_pages: int) -> SupplierIndexInfo:
+    def set_settings(self, autocrawl_pages: int | None = None, min_shops: int | None = None) -> SupplierIndexInfo:
         with self._lock:
-            self.autocrawl_pages = max(0, min(int(autocrawl_pages), 50_000))
+            if autocrawl_pages is not None:
+                self.autocrawl_pages = max(0, min(int(autocrawl_pages), 50_000))
+            if min_shops is not None:
+                self.min_shops = max(1, min(int(min_shops), 10))
         self.save()
         return self.info()
 
@@ -395,10 +407,21 @@ class SupplierIndex:
             total = sum(len(o) for o in self.offers.values())
             return f"каталоги поставщиков: {total} позиций у {len(self.suppliers)} поставщиков"
 
-    def lookup(self, name: str, description: str, unit: str, today: str) -> InternetLookup:
-        query = re.sub(r"\s+", " ", f"{name} {description}".strip())[:300]
+    def rank(self, name: str) -> list[tuple[SupplierOffer, float]]:
+        """Предложения индекса по убыванию совпадения (не ниже порога «похоже»)."""
         with self._lock:
-            ranked = self._matcher.search(name)
+            return self._matcher.search(name)
+
+    @staticmethod
+    def matched_shops(ranked: list[tuple[SupplierOffer, float]]) -> int:
+        """Сколько разных магазинов дали ту же позицию (совпадение не ниже MATCH_THRESHOLD)."""
+        return len({offer.supplier_id for offer, score in ranked if score >= MATCH_THRESHOLD})
+
+    def lookup(self, name: str, description: str, unit: str, today: str) -> InternetLookup:
+        return self.build_lookup(self.rank(name), name, description, today)
+
+    def build_lookup(self, ranked: list[tuple[SupplierOffer, float]], name: str, description: str, today: str) -> InternetLookup:
+        query = re.sub(r"\s+", " ", f"{name} {description}".strip())[:300]
         if not ranked:
             return InternetLookup(status="not_found", query=query, looked_up_at=today, provider="suppliers", comment="в каталогах поставщиков похожих позиций нет")
         shown = ranked[:OFFERS_SHOWN]
