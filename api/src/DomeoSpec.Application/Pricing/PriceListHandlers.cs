@@ -38,6 +38,50 @@ public sealed class MatchPriceListHandler(IPricingEngine engine)
     }
 }
 
+/// <summary>Сценарий «добавить поставщика»: название обязательно, сайт — если есть, то настоящий адрес.</summary>
+public sealed class AddSupplierHandler(IPricingEngine engine)
+{
+    public const int MaxNameLength = 120;
+
+    public async Task<Supplier> HandleAsync(SupplierCreate body, CancellationToken ct)
+    {
+        var name = (body.Name ?? "").Trim();
+        if (name.Length == 0)
+            throw new ValidationFailedException("Укажите название поставщика.");
+        if (name.Length > MaxNameLength)
+            throw new ValidationFailedException("Название поставщика слишком длинное.");
+        var site = (body.Site ?? "").Trim();
+        if (site.Length > 0 && !IsSite(site))
+            throw new ValidationFailedException("Адрес сайта должен быть вида https://example.ru.");
+        var pages = Math.Clamp(body.MaxPages <= 0 ? 3000 : body.MaxPages, 50, 50_000);
+        return await engine.AddSupplierAsync(new SupplierCreate(name, site, pages), ct);
+    }
+
+    private static bool IsSite(string site)
+    {
+        var withScheme = site.Contains("://") ? site : "https://" + site;
+        return Uri.TryCreate(withScheme, UriKind.Absolute, out var uri)
+               && uri.Scheme is "http" or "https"
+               && uri.Host.Contains('.');
+    }
+}
+
+/// <summary>Сценарий «загрузить прайс-лист поставщика».</summary>
+public sealed class UploadSupplierPriceListHandler(IPricingEngine engine)
+{
+    public async Task<Supplier> HandleAsync(string id, Stream xlsx, string fileName, long length, CancellationToken ct)
+    {
+        var ok = fileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase) || fileName.EndsWith(".xlsm", StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(fileName) || !ok)
+            throw new ValidationFailedException("Ожидается прайс-лист в формате xlsx.");
+        if (length <= 0)
+            throw new ValidationFailedException("Файл пустой.");
+        if (length > UploadPriceListHandler.MaxFileBytes)
+            throw new ValidationFailedException("Файл больше 100 МБ.");
+        return await engine.UploadSupplierPriceListAsync(id, xlsx, fileName, ct);
+    }
+}
+
 /// <summary>Сценарий «найти цены в интернете»: пачка небольшая — на позицию уходят десятки секунд.</summary>
 public sealed class LookupInternetHandler(IPricingEngine engine)
 {

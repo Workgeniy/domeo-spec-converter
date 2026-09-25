@@ -1,4 +1,4 @@
-import { Alert, Badge, Button, FileButton, Group, Menu, Pagination, Paper, Progress, SegmentedControl, Stack, Table, Text, TextInput } from '@mantine/core'
+import { Alert, Anchor, Badge, Button, FileButton, Group, Menu, Pagination, Paper, Progress, SegmentedControl, Stack, Table, Text, TextInput } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { IconChevronDown, IconDatabaseImport, IconFileDownload, IconRefresh, IconWorldSearch } from '@tabler/icons-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -15,6 +15,7 @@ import {
   type PriceListInfo,
 } from '../api'
 import { useWorkspace, type HistoryChoice, type RowKey, type SummaryRow } from '../store'
+import { useUi } from '../ui'
 import { CostRowView } from './CostRow'
 import { formatMoney } from './format'
 import { TableScroller } from './TableScroller'
@@ -45,6 +46,7 @@ export function CostPanel({ onDownload, downloading }: Props) {
   const applyInternet = useWorkspace((s) => s.applyInternet)
   const chooseInternetPrice = useWorkspace((s) => s.chooseInternetPrice)
   const chooseOffer = useWorkspace((s) => s.chooseOffer)
+  const openSuppliers = useUi((s) => s.openSuppliers)
 
   const [priceList, setPriceList] = useState<PriceListInfo | null | undefined>(undefined)
   const [internet, setInternet] = useState<InternetSearchInfo | null | undefined>(undefined)
@@ -229,11 +231,19 @@ export function CostPanel({ onDownload, downloading }: Props) {
             )}
             {internet && !internet.configured && (
               <Text size="sm" c="dimmed">
-                Не настроен: на сервере ядра нужен ключ ANTHROPIC_API_KEY (локально — файл core/.env, на стенде — deploy/secrets.env).
-                Модель сама ищет предложения в интернете, читает страницы и возвращает цены со ссылками.
+                Не настроен. Бесплатный путь — каталоги и прайсы поставщиков (кнопка «Поставщики» вверху); платный — ключ ANTHROPIC_API_KEY на
+                сервере ядра, тогда модель сама ищет предложения в интернете.
               </Text>
             )}
-            {internet?.configured && (
+            {internet?.configured && internet.provider === 'suppliers' && (
+              <Text size="sm" c="dimmed">
+                {internet.model} ·{' '}
+                <Anchor size="sm" onClick={openSuppliers}>
+                  настроить поставщиков
+                </Anchor>
+              </Text>
+            )}
+            {internet?.configured && internet.provider !== 'suppliers' && (
               <Text size="sm" c="dimmed">
                 модель {internet.model} · в кэше {internet.cached} позиций · найденное свежее {internet.ttl_days} дн. заново не ищется
               </Text>
@@ -270,7 +280,7 @@ export function CostPanel({ onDownload, downloading }: Props) {
                   loading={progress !== null}
                   disabled={!searchReady}
                 >
-                  Найти цены в интернете
+                  {internet?.provider === 'suppliers' ? 'Найти цены у поставщиков' : 'Найти цены в интернете'}
                 </Button>
               </Menu.Target>
               <Menu.Dropdown>

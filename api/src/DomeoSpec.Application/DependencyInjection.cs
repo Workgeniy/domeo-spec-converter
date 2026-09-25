@@ -14,6 +14,8 @@ public static class DependencyInjection
         services.AddScoped<UploadPriceListHandler>();
         services.AddScoped<MatchPriceListHandler>();
         services.AddScoped<LookupInternetHandler>();
+        services.AddScoped<AddSupplierHandler>();
+        services.AddScoped<UploadSupplierPriceListHandler>();
         return services;
     }
 }

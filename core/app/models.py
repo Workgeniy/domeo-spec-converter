@@ -286,3 +286,53 @@ class InternetLookupRequest(BaseModel):
 
 class InternetLookupResponse(BaseModel):
     lookups: dict[str, InternetLookup] = Field(default_factory=dict)  # id позиции → результат
+
+
+# ---------- каталоги поставщиков ----------
+
+SupplierKind = Literal["site", "pricelist"]
+SupplierStatus = Literal["idle", "running", "done", "error"]
+
+
+class Supplier(BaseModel):
+    """Поставщик, чьи цены собираем: сайт (обход каталога) и/или прайс-лист xlsx."""
+
+    id: str
+    name: str
+    site: str = ""  # https://example.ru — обходим карту сайта, фид YML, разметку страниц
+    kind: SupplierKind = "site"
+    source: str = ""  # что нашли: адрес фида/карты сайта или имя файла прайса
+    offers: int = 0
+    collected_at: str = ""  # дата последнего сбора (ГГГГ-ММ-ДД)
+    status: SupplierStatus = "idle"
+    progress: str = ""  # «страниц 120 из 500, цен 80»
+    error: str = ""
+    max_pages: int = 3000
+
+
+class SupplierOffer(BaseModel):
+    """Одна позиция каталога поставщика."""
+
+    supplier_id: str
+    supplier: str
+    name: str
+    price: float  # за единицу, руб.
+    url: str = ""
+    sku: str = ""
+    collected_at: str = ""
+
+
+class SupplierCreate(BaseModel):
+    name: str
+    site: str = ""
+    max_pages: int = 3000
+
+
+class SupplierIndexInfo(BaseModel):
+    suppliers: list[Supplier] = Field(default_factory=list)
+    offers: int = 0
+    updated_at: str = ""
+
+
+class SupplierSample(BaseModel):
+    offers: list[SupplierOffer] = Field(default_factory=list)

@@ -16,6 +16,7 @@ public sealed class GlobalExceptionHandler(IProblemDetailsService problemDetails
         var (status, title, code) = exception switch
         {
             ValidationFailedException => (StatusCodes.Status400BadRequest, "Bad Request", ErrorCodes.ValidationFailed),
+            NotFoundException => (StatusCodes.Status404NotFound, "Not Found", ErrorCodes.NotFound),
             EngineFailureException => (StatusCodes.Status422UnprocessableEntity, "Unprocessable Entity", ErrorCodes.EngineFailed),
             ServiceUnavailableException => (StatusCodes.Status503ServiceUnavailable, "Service Unavailable", ErrorCodes.ServiceUnavailable),
             _ => (StatusCodes.Status500InternalServerError, "Internal Server Error", ErrorCodes.Unexpected),

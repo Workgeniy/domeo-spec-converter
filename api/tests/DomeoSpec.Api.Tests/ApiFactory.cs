@@ -77,6 +77,54 @@ public sealed class FakePricing : IPricingEngine
             i => new InternetLookup { Status = "found", Query = i.Name, LookedUpAt = "2026-09-25", Offers = [offer], Price = 1250, Provider = "fake", Searches = 2 });
         return Task.FromResult(result);
     }
+
+    public List<Supplier> Suppliers { get; } = [];
+
+    public Task<SupplierIndexInfo> GetSuppliersAsync(CancellationToken ct) =>
+        Task.FromResult(new SupplierIndexInfo { Suppliers = Suppliers.ToList(), Offers = Suppliers.Sum(s => s.Offers), UpdatedAt = Suppliers.Count > 0 ? "2026-09-25" : "" });
+
+    public Task<Supplier> AddSupplierAsync(SupplierCreate supplier, CancellationToken ct)
+    {
+        var created = new Supplier { Id = $"s{Suppliers.Count + 1}", Name = supplier.Name, Site = supplier.Site, Kind = supplier.Site.Length > 0 ? "site" : "pricelist", MaxPages = supplier.MaxPages };
+        Suppliers.Add(created);
+        return Task.FromResult(created);
+    }
+
+    public Task RemoveSupplierAsync(string id, CancellationToken ct)
+    {
+        if (Suppliers.RemoveAll(s => s.Id == id) == 0) throw new NotFoundException("Поставщик не найден");
+        return Task.CompletedTask;
+    }
+
+    public Task<Supplier> StartCrawlAsync(string id, CancellationToken ct)
+    {
+        var supplier = Find(id);
+        if (supplier.Site.Length == 0) throw new ValidationFailedException("у поставщика не указан сайт — загрузите прайс-лист");
+        return Task.FromResult(Replace(supplier with { Status = "running", Progress = "начинаем" }));
+    }
+
+    public Task<Supplier> StopCrawlAsync(string id, CancellationToken ct) => Task.FromResult(Replace(Find(id) with { Status = "done", Progress = "" }));
+
+    public Task<Supplier> UploadSupplierPriceListAsync(string id, Stream xlsx, string fileName, CancellationToken ct) =>
+        Task.FromResult(Replace(Find(id) with { Offers = 2, Source = "прайс " + fileName, Status = "done", CollectedAt = "2026-09-25" }));
+
+    public Task<IReadOnlyList<SupplierOffer>> SampleOffersAsync(string id, CancellationToken ct)
+    {
+        var supplier = Find(id);
+        IReadOnlyList<SupplierOffer> offers = supplier.Offers == 0
+            ? []
+            : [new SupplierOffer { SupplierId = id, Supplier = supplier.Name, Name = "Стул детский", Price = 950, Sku = "ST-2", CollectedAt = "2026-09-25" }, new SupplierOffer { SupplierId = id, Supplier = supplier.Name, Name = "Стол трапециевидный", Price = 3100 }];
+        return Task.FromResult(offers);
+    }
+
+    private Supplier Find(string id) => Suppliers.FirstOrDefault(s => s.Id == id) ?? throw new NotFoundException("Поставщик не найден");
+
+    private Supplier Replace(Supplier supplier)
+    {
+        var index = Suppliers.FindIndex(s => s.Id == supplier.Id);
+        Suppliers[index] = supplier;
+        return supplier;
+    }
 }
 
 public sealed class FakeEngine : IParsingEngine

@@ -22,4 +22,22 @@ public interface IPricingEngine
 
     /// <summary>Найти цены в интернете на дату: id позиции → результат. refresh — не глядя на кэш.</summary>
     Task<IReadOnlyDictionary<string, InternetLookup>> LookupInternetAsync(IReadOnlyList<MatchRequestItem> items, bool refresh, CancellationToken ct);
+
+    // ---- каталоги поставщиков (индекс цен в ядре) ----
+
+    Task<SupplierIndexInfo> GetSuppliersAsync(CancellationToken ct);
+
+    Task<Supplier> AddSupplierAsync(SupplierCreate supplier, CancellationToken ct);
+
+    Task RemoveSupplierAsync(string id, CancellationToken ct);
+
+    /// <summary>Запустить обход сайта поставщика в фоне; состояние — в <see cref="GetSuppliersAsync"/>.</summary>
+    Task<Supplier> StartCrawlAsync(string id, CancellationToken ct);
+
+    Task<Supplier> StopCrawlAsync(string id, CancellationToken ct);
+
+    /// <summary>Прайс-лист xlsx заменяет предложения поставщика в индексе.</summary>
+    Task<Supplier> UploadSupplierPriceListAsync(string id, Stream xlsx, string fileName, CancellationToken ct);
+
+    Task<IReadOnlyList<SupplierOffer>> SampleOffersAsync(string id, CancellationToken ct);
 }

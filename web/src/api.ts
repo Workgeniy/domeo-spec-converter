@@ -205,13 +205,48 @@ export interface MatchRequestItem {
   unit?: string
 }
 
-/** Состояние поиска цен в интернете: настроен ли ключ, чем ищем, сколько в кэше. */
+/** Состояние поиска цен в интернете: настроен ли, чем ищем (claude | suppliers | fake), сколько в кэше. */
 export interface InternetSearchInfo {
   configured: boolean
   provider: string
   model: string
   cached: number
   ttl_days: number
+}
+
+export type SupplierKind = 'site' | 'pricelist'
+export type SupplierStatus = 'idle' | 'running' | 'done' | 'error'
+
+/** Поставщик, чьи цены собираем: сайт (обход каталога) и/или прайс-лист xlsx. */
+export interface Supplier {
+  id: string
+  name: string
+  site: string
+  kind: SupplierKind
+  /** Что нашли: адрес фида/карты сайта или имя файла прайса. */
+  source: string
+  offers: number
+  collected_at: string
+  status: SupplierStatus
+  progress: string
+  error: string
+  max_pages: number
+}
+
+export interface SupplierOffer {
+  supplier_id: string
+  supplier: string
+  name: string
+  price: number
+  url: string
+  sku: string
+  collected_at: string
+}
+
+export interface SupplierIndexInfo {
+  suppliers: Supplier[]
+  offers: number
+  updated_at: string
 }
 
 export interface Health {
@@ -285,6 +320,39 @@ export function lookupInternet(items: MatchRequestItem[], refresh = false): Prom
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ items, refresh }),
   }).then((r) => readData<{ lookups: Record<string, InternetLookup> }>(r).then((d) => d.lookups))
+}
+
+const SUPPLIERS = '/api/specifications/suppliers'
+
+export function getSuppliers(): Promise<SupplierIndexInfo> {
+  return fetch(SUPPLIERS).then((r) => readData<SupplierIndexInfo>(r))
+}
+
+export function addSupplier(body: { name: string; site: string; max_pages?: number }): Promise<Supplier> {
+  return fetch(SUPPLIERS, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => readData<Supplier>(r))
+}
+
+export async function removeSupplier(id: string): Promise<void> {
+  const response = await fetch(`${SUPPLIERS}/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  if (!response.ok) throw new Error(await readError(response))
+}
+
+export function crawlSupplier(id: string): Promise<Supplier> {
+  return fetch(`${SUPPLIERS}/${encodeURIComponent(id)}/crawl`, { method: 'POST' }).then((r) => readData<Supplier>(r))
+}
+
+export function stopSupplier(id: string): Promise<Supplier> {
+  return fetch(`${SUPPLIERS}/${encodeURIComponent(id)}/stop`, { method: 'POST' }).then((r) => readData<Supplier>(r))
+}
+
+export function uploadSupplierPriceList(id: string, file: File): Promise<Supplier> {
+  const form = new FormData()
+  form.append('file', file)
+  return fetch(`${SUPPLIERS}/${encodeURIComponent(id)}/pricelist`, { method: 'POST', body: form }).then((r) => readData<Supplier>(r))
+}
+
+export function sampleSupplierOffers(id: string): Promise<SupplierOffer[]> {
+  return fetch(`${SUPPLIERS}/${encodeURIComponent(id)}/sample`).then((r) => readData<{ offers: SupplierOffer[] }>(r).then((d) => d.offers))
 }
 
 export async function exportExcel(doc: ParsedDocument): Promise<{ blob: Blob; fileName: string }> {

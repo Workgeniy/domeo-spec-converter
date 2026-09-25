@@ -109,7 +109,7 @@ public sealed record PriceListInfo
 
 public sealed record MatchRequestItem(string Id, string Name, string Description = "", string Unit = "");
 
-/// <summary>Состояние поиска цен в интернете: настроен ли ключ, чем ищем, сколько в кэше.</summary>
+/// <summary>Состояние поиска цен в интернете: настроен ли, чем ищем (claude | suppliers | fake), сколько в кэше.</summary>
 public sealed record InternetSearchInfo
 {
     public bool Configured { get; init; }
@@ -117,6 +117,46 @@ public sealed record InternetSearchInfo
     public string Model { get; init; } = "";
     public int Cached { get; init; }
     public int TtlDays { get; init; } = 7;
+}
+
+/// <summary>Поставщик, чьи цены собираем: сайт (обход каталога) и/или прайс-лист xlsx.</summary>
+public sealed record Supplier
+{
+    public string Id { get; init; } = "";
+    public string Name { get; init; } = "";
+    public string Site { get; init; } = "";
+    /// <summary>site | pricelist.</summary>
+    public string Kind { get; init; } = "site";
+    /// <summary>Что нашли: адрес фида/карты сайта или имя файла прайса.</summary>
+    public string Source { get; init; } = "";
+    public int Offers { get; init; }
+    public string CollectedAt { get; init; } = "";
+    /// <summary>idle | running | done | error.</summary>
+    public string Status { get; init; } = "idle";
+    public string Progress { get; init; } = "";
+    public string Error { get; init; } = "";
+    public int MaxPages { get; init; } = 3000;
+}
+
+/// <summary>Одна позиция каталога поставщика.</summary>
+public sealed record SupplierOffer
+{
+    public string SupplierId { get; init; } = "";
+    public string Supplier { get; init; } = "";
+    public string Name { get; init; } = "";
+    public double Price { get; init; }
+    public string Url { get; init; } = "";
+    public string Sku { get; init; } = "";
+    public string CollectedAt { get; init; } = "";
+}
+
+public sealed record SupplierCreate(string Name, string Site = "", int MaxPages = 3000);
+
+public sealed record SupplierIndexInfo
+{
+    public IReadOnlyList<Supplier> Suppliers { get; init; } = [];
+    public int Offers { get; init; }
+    public string UpdatedAt { get; init; } = "";
 }
 
 /// <summary>

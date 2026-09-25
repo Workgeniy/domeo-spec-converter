@@ -234,9 +234,27 @@ class FakePriceProvider:
         )
 
 
+class SupplierIndexProvider:
+    """Поиск по индексу каталогов поставщиков — без модели и без внешних запросов."""
+
+    name = "suppliers"
+    cacheable = False  # индекс локальный и мгновенный, а кэш пережил бы обновление каталога
+
+    def __init__(self, index):  # SupplierIndex; без аннотации, чтобы не тянуть импорт по кругу
+        self.index = index
+
+    @property
+    def model(self) -> str:
+        return self.index.description
+
+    def lookup(self, name: str, description: str, unit: str, today: str) -> InternetLookup:
+        return self.index.lookup(name, description, unit, today)
+
+
 class InternetPriceService:
-    """Поиск цен пачками с кэшем на диске. Без провайдера (нет ключа) — только отвечает,
-    что не настроен."""
+    """Поиск цен пачками с кэшем на диске. Провайдер выбирается переменной
+    PRICE_SEARCH_PROVIDER: claude (нужен ключ), suppliers (индекс каталогов поставщиков),
+    fake (заглушка); без неё — claude при наличии ключа, иначе suppliers."""
 
     def __init__(
         self,
@@ -254,18 +272,23 @@ class InternetPriceService:
         self._lock = threading.Lock()
 
     @classmethod
-    def from_env(cls) -> InternetPriceService:
+    def from_env(cls, supplier_index=None) -> InternetPriceService:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        choice = os.environ.get("PRICE_SEARCH_PROVIDER", "").strip().lower()
         provider: PriceSearchProvider | None = None
-        if os.environ.get("PRICE_SEARCH_PROVIDER", "").strip().lower() == "fake":
+        if choice == "fake":
             provider = FakePriceProvider()
-        elif api_key:
+        elif choice == "suppliers" and supplier_index is not None:
+            provider = SupplierIndexProvider(supplier_index)
+        elif choice in ("", "claude") and api_key:
             provider = ClaudeWebSearchProvider(
                 api_key=api_key,
                 model=os.environ.get("PRICE_SEARCH_MODEL", DEFAULT_MODEL),
                 effort=os.environ.get("PRICE_SEARCH_EFFORT", DEFAULT_EFFORT),
                 max_searches=int(os.environ.get("PRICE_SEARCH_MAX_SEARCHES", DEFAULT_MAX_SEARCHES)),
             )
+        elif choice == "" and supplier_index is not None:
+            provider = SupplierIndexProvider(supplier_index)
         return cls(
             provider,
             ttl_days=int(os.environ.get("INTERNET_PRICE_TTL_DAYS", DEFAULT_TTL_DAYS)),
@@ -323,12 +346,13 @@ class InternetPriceService:
     def lookup_many(self, items: list[MatchRequestItem], refresh: bool = False) -> dict[str, InternetLookup]:
         """id позиции → результат. Одинаковые позиции ищутся один раз; ошибки не кэшируются."""
         today = today_moscow()
+        use_cache = bool(getattr(self.provider, "cacheable", True))
         result: dict[str, InternetLookup] = {}
         pending: dict[str, MatchRequestItem] = {}
         waiting: dict[str, list[str]] = {}
         for item in items:
             key = self.cache_key(item.name, item.description)
-            cached = None if refresh else self.cached(item.name, item.description, today)
+            cached = None if refresh or not use_cache else self.cached(item.name, item.description, today)
             if cached is not None:
                 result[item.id] = cached
                 continue
@@ -338,14 +362,15 @@ class InternetPriceService:
             keys = list(pending)
             with ThreadPoolExecutor(max_workers=self.concurrency) as pool:
                 lookups = list(pool.map(lambda key: self._lookup_one(pending[key], today), keys))
-            with self._lock:
-                for key, lookup in zip(keys, lookups):
-                    if lookup.status != "error":
-                        self._cache[key] = lookup
+            if use_cache:
+                with self._lock:
+                    for key, lookup in zip(keys, lookups):
+                        if lookup.status != "error":
+                            self._cache[key] = lookup
+                self.save()
             for key, lookup in zip(keys, lookups):
                 for item_id in waiting[key]:
                     result[item_id] = lookup
-            self.save()
         return result
 
     def _lookup_one(self, item: MatchRequestItem, today: str) -> InternetLookup:

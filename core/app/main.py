@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.responses import StreamingResponse
 
 from .env import load_env_file
@@ -27,24 +27,31 @@ from .models import (
     MatchResponse,
     ParsedDocument,
     PriceListInfo,
+    Supplier,
+    SupplierCreate,
+    SupplierIndexInfo,
+    SupplierSample,
 )
 from .parsing.ocr import default_provider
 from .parsing.spec_parser import parse_pdf
 from .pricing.internet import InternetPriceService
 from .pricing.store import PriceListStore
+from .pricing.suppliers.index import SupplierIndex
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 MAX_INTERNET_ITEMS = 50  # поиск — долгий (десятки секунд на позицию), фронт шлёт пачками
 
 load_env_file()  # ключи для локального запуска — из core/.env, если он есть
 price_lists = PriceListStore()
-internet_prices = InternetPriceService.from_env()
+supplier_index = SupplierIndex()
+internet_prices = InternetPriceService.from_env(supplier_index)
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Прайс закупки и кэш интернет-цен, накопленные раньше, подхватываются при старте.
+    # Прайс закупки, индекс поставщиков и кэш интернет-цен, накопленные раньше, подхватываются при старте.
     price_lists.load()
+    supplier_index.load()
     internet_prices.load()
     yield
 
@@ -60,7 +67,83 @@ def health() -> dict:
         "ocr": ocr.name if ocr else None,
         "pricelist": price_lists.price_list is not None,
         "internet": internet_prices.configured,
+        "suppliers": len(supplier_index.suppliers),
     }
+
+
+# ---------- каталоги поставщиков ----------
+
+
+def _supplier_or_404(supplier_id: str) -> Supplier:
+    try:
+        return supplier_index.get(supplier_id)
+    except KeyError:
+        raise HTTPException(404, "Поставщик не найден") from None
+
+
+@app.get("/api/suppliers", response_model=SupplierIndexInfo)
+def suppliers_info() -> SupplierIndexInfo:
+    return supplier_index.info()
+
+
+@app.post("/api/suppliers", response_model=Supplier)
+def suppliers_add(body: SupplierCreate) -> Supplier:
+    try:
+        return supplier_index.add(body.name, body.site, body.max_pages)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.delete("/api/suppliers/{supplier_id}", status_code=204)
+def suppliers_remove(supplier_id: str) -> Response:
+    try:
+        supplier_index.remove(supplier_id)
+    except KeyError:
+        raise HTTPException(404, "Поставщик не найден") from None
+    return Response(status_code=204)
+
+
+@app.post("/api/suppliers/{supplier_id}/crawl", response_model=Supplier)
+def suppliers_crawl(supplier_id: str) -> Supplier:
+    """Запустить обход сайта поставщика в фоне; состояние — в GET /api/suppliers."""
+    _supplier_or_404(supplier_id)
+    try:
+        return supplier_index.start_crawl(supplier_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/suppliers/{supplier_id}/stop", response_model=Supplier)
+def suppliers_stop(supplier_id: str) -> Supplier:
+    supplier = _supplier_or_404(supplier_id)
+    supplier_index.stop_crawl(supplier_id)
+    return supplier
+
+
+@app.post("/api/suppliers/{supplier_id}/pricelist", response_model=Supplier)
+def suppliers_pricelist(supplier_id: str, file: UploadFile = File(...), file_name: str | None = Form(None)) -> Supplier:
+    """Прайс-лист поставщика (xlsx) заменяет его предложения в индексе."""
+    _supplier_or_404(supplier_id)
+    name = file_name or file.filename or "прайс.xlsx"
+    if not name.lower().endswith((".xlsx", ".xlsm")):
+        raise HTTPException(400, "Ожидается прайс-лист в формате xlsx")
+    content = file.file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "Файл больше 100 МБ")
+    try:
+        return supplier_index.import_price_list(supplier_id, content, name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(422, f"Не удалось прочитать прайс: {exc}") from exc
+
+
+@app.get("/api/suppliers/{supplier_id}/sample", response_model=SupplierSample)
+def suppliers_sample(supplier_id: str) -> SupplierSample:
+    _supplier_or_404(supplier_id)
+    return SupplierSample(offers=supplier_index.sample(supplier_id))
 
 
 # ---------- прайс закупки ----------

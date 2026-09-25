@@ -66,6 +66,59 @@ public sealed class PythonPricingClient(HttpClient http) : IPricingEngine
         return body?.Lookups ?? new Dictionary<string, InternetLookup>();
     }
 
+    public async Task<SupplierIndexInfo> GetSuppliersAsync(CancellationToken ct)
+    {
+        using var response = await SendAsync(() => http.GetAsync("/api/suppliers", ct), ct);
+        return await response.Content.ReadFromJsonAsync<SupplierIndexInfo>(Json, ct) ?? new SupplierIndexInfo();
+    }
+
+    public async Task<Supplier> AddSupplierAsync(SupplierCreate supplier, CancellationToken ct)
+    {
+        using var response = await SendAsync(() => http.PostAsJsonAsync("/api/suppliers", supplier, Json, ct), ct);
+        return await ReadSupplierAsync(response, ct);
+    }
+
+    public async Task RemoveSupplierAsync(string id, CancellationToken ct)
+    {
+        using var response = await SendAsync(() => http.DeleteAsync($"/api/suppliers/{Uri.EscapeDataString(id)}", ct), ct);
+    }
+
+    public async Task<Supplier> StartCrawlAsync(string id, CancellationToken ct)
+    {
+        using var response = await SendAsync(() => http.PostAsync($"/api/suppliers/{Uri.EscapeDataString(id)}/crawl", null, ct), ct);
+        return await ReadSupplierAsync(response, ct);
+    }
+
+    public async Task<Supplier> StopCrawlAsync(string id, CancellationToken ct)
+    {
+        using var response = await SendAsync(() => http.PostAsync($"/api/suppliers/{Uri.EscapeDataString(id)}/stop", null, ct), ct);
+        return await ReadSupplierAsync(response, ct);
+    }
+
+    public async Task<Supplier> UploadSupplierPriceListAsync(string id, Stream xlsx, string fileName, CancellationToken ct)
+    {
+        using var form = new MultipartFormDataContent();
+        var file = new StreamContent(xlsx);
+        file.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        form.Add(file, "file", "pricelist.xlsx");
+        form.Add(new StringContent(fileName), "file_name");
+        using var response = await SendAsync(() => http.PostAsync($"/api/suppliers/{Uri.EscapeDataString(id)}/pricelist", form, ct), ct);
+        return await ReadSupplierAsync(response, ct);
+    }
+
+    public async Task<IReadOnlyList<SupplierOffer>> SampleOffersAsync(string id, CancellationToken ct)
+    {
+        using var response = await SendAsync(() => http.GetAsync($"/api/suppliers/{Uri.EscapeDataString(id)}/sample", ct), ct);
+        var body = await response.Content.ReadFromJsonAsync<SampleBody>(Json, ct);
+        return body?.Offers ?? [];
+    }
+
+    private static async Task<Supplier> ReadSupplierAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        return await response.Content.ReadFromJsonAsync<Supplier>(Json, ct)
+               ?? throw new ServiceUnavailableException("Ядро вернуло пустой ответ о поставщике.");
+    }
+
     private static async Task<HttpResponseMessage> SendAsync(Func<Task<HttpResponseMessage>> send, CancellationToken ct)
     {
         HttpResponseMessage response;
@@ -95,9 +148,11 @@ public sealed class PythonPricingClient(HttpClient http) : IPricingEngine
         }
         var status = response.StatusCode;
         response.Dispose();
-        // 409 у ядра — «прайс не загружен» / «поиск не настроен»: правило предметной области, а не сбой.
+        // 409 у ядра — «прайс не загружен» / «поиск не настроен» / «обход уже идёт»: правило предметной области, а не сбой.
         if (status is HttpStatusCode.Conflict)
             throw new ValidationFailedException(detail ?? "Прайс закупки ещё не загружен.");
+        if (status is HttpStatusCode.NotFound)
+            throw new NotFoundException(detail ?? "Не найдено.");
         if (status is HttpStatusCode.UnprocessableEntity or HttpStatusCode.BadRequest)
             throw new EngineFailureException(detail ?? "Ядро не смогло обработать запрос.");
         throw new ServiceUnavailableException($"Ядро разбора ответило {(int)status}: {detail}");
@@ -106,6 +161,8 @@ public sealed class PythonPricingClient(HttpClient http) : IPricingEngine
     private sealed record MatchBody(Dictionary<string, HistoryPrice> Matches);
 
     private sealed record LookupBody(Dictionary<string, InternetLookup> Lookups);
+
+    private sealed record SampleBody(List<SupplierOffer> Offers);
 
     private sealed record ErrorBody(string? Detail);
 }

@@ -58,7 +58,11 @@ function offerForPrice(lookup: InternetLookup): InternetOffer | undefined {
 function withLookup(row: SummaryRow, lookup: InternetLookup): SummaryRow {
   // Ошибка поиска не стирает прежний удачный результат — оператор увидит её в сводке панели.
   if (lookup.status === 'error' && row.internet && row.internet.status !== 'error') return row
-  if (lookup.status !== 'found') return { ...row, internet: lookup, internet_price: null, internet_source: '', internet_date: lookup.looked_up_at }
+  if (lookup.status !== 'found') {
+    // Цена с рынка пропала; базовая, взятая из неё, остаётся числом, но уже «вручную» — источника у неё больше нет.
+    const source = row.price_source === 'internet' ? 'manual' : row.price_source
+    return { ...row, internet: lookup, internet_price: null, internet_source: '', internet_date: lookup.looked_up_at, price_source: source }
+  }
   const offer = offerForPrice(lookup)
   const price = lookup.price ?? offer?.price ?? null
   const next: SummaryRow = { ...row, internet: lookup, internet_price: price, internet_source: offer?.url ?? '', internet_date: lookup.looked_up_at }
