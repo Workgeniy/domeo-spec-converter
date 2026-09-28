@@ -13,6 +13,7 @@ import os
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -36,8 +37,9 @@ SKIP_HOSTS = (
 )
 SKIP_EXT = re.compile(r"\.(pdf|doc|docx|xls|xlsx|zip|rar|jpg|jpeg|png|gif|webp)$", re.I)
 MAX_HITS = 8
-PAGE_TIMEOUT = 15.0
+PAGE_TIMEOUT = 10.0  # медленный магазин не должен держать позицию
 PAGE_DELAY = 0.3
+FETCH_WORKERS = 4  # страницы из выдачи — параллельно, они с разных сайтов
 MAX_BODY = 3 * 1024 * 1024
 
 
@@ -184,10 +186,12 @@ class WebPriceSearch:
         return pages
 
     def _read_pages(self, hits: list[SearchHit]) -> list[DiscoveredPage]:
-        pages: list[DiscoveredPage] = []
+        """Страницы из выдачи читаются параллельно (это разные сайты): иначе позиция ждёт
+        каждую страницу и каждый robots.txt по очереди, и один медленный сайт тянет всё."""
+        candidates: list[SearchHit] = []
         seen_hosts: dict[str, int] = {}
         for hit in hits:
-            if len(pages) >= self.max_hits:
+            if len(candidates) >= self.max_hits:
                 break
             if not is_shop_candidate(hit.url):
                 continue
@@ -195,14 +199,19 @@ class WebPriceSearch:
             if seen_hosts.get(host, 0) >= 2:  # не больше двух страниц с одного сайта
                 continue
             seen_hosts[host] = seen_hosts.get(host, 0) + 1
-            if not self._allowed(hit.url):
-                continue
-            response = self._get(hit.url)
-            if response is None or "html" not in response.headers.get("content-type", "html"):
-                continue
-            offers = extract_offers(response.text, str(response.url))
-            pages.append(DiscoveredPage(url=str(response.url), host=host, site_name=site_name_of(response.text), offers=offers))
-        return pages
+            candidates.append(hit)
+        with ThreadPoolExecutor(max_workers=min(FETCH_WORKERS, max(1, len(candidates)))) as pool:
+            results = list(pool.map(self._read_page, candidates))
+        return [page for page in results if page is not None]
+
+    def _read_page(self, hit: SearchHit) -> DiscoveredPage | None:
+        if not self._allowed(hit.url):
+            return None
+        response = self._get(hit.url)
+        if response is None or "html" not in response.headers.get("content-type", "html"):
+            return None
+        offers = extract_offers(response.text, str(response.url))
+        return DiscoveredPage(url=str(response.url), host=host_of(hit.url), site_name=site_name_of(response.text), offers=offers)
 
     # ---------- сеть ----------
 
@@ -223,12 +232,14 @@ class WebPriceSearch:
     def _allowed(self, url: str) -> bool:
         parts = urlsplit(url)
         base = f"{parts.scheme}://{parts.netloc}"
-        parser = self._robots.get(base)
+        with self._lock:
+            parser = self._robots.get(base)
         if parser is None:
             parser = robotparser.RobotFileParser()
             response = self._get(base + "/robots.txt")
             parser.parse(response.text.splitlines() if response is not None else [])
-            self._robots[base] = parser
+            with self._lock:
+                self._robots[base] = parser
         try:
             return parser.can_fetch(USER_AGENT, url) and parser.can_fetch("*", url)
         except Exception:  # noqa: BLE001
