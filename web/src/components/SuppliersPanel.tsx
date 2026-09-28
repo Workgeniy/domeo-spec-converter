@@ -204,7 +204,10 @@ function SectionsEditor({ supplier, suggestions, onSave }: { supplier: Supplier;
 }
 
 export function SuppliersPanel() {
-  const objectSections = useWorkspace((s) => Array.from(new Set(s.documents.flatMap((d) => d.doc.summary).map((r) => r.section.trim()).filter(Boolean))))
+  // Селектор стора должен возвращать то же значение при тех же данных, иначе React зациклится;
+  // производный список разделов считаем через useMemo.
+  const documents = useWorkspace((s) => s.documents)
+  const objectSections = useMemo(() => Array.from(new Set(documents.flatMap((d) => d.doc.summary).map((r) => r.section.trim()).filter(Boolean))), [documents])
   const [info, setInfo] = useState<SupplierIndexInfo | null>(null)
   const [name, setName] = useState('')
   const [site, setSite] = useState('')
