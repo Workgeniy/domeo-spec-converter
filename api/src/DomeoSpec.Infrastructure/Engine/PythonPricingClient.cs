@@ -95,15 +95,35 @@ public sealed class PythonPricingClient(HttpClient http) : IPricingEngine
         return await ReadSupplierAsync(response, ct);
     }
 
-    public async Task<Supplier> UploadSupplierPriceListAsync(string id, Stream xlsx, string fileName, CancellationToken ct)
+    public async Task<Supplier> UploadSupplierPriceListAsync(string id, Stream xlsx, string fileName, string section, CancellationToken ct)
     {
         using var form = new MultipartFormDataContent();
         var file = new StreamContent(xlsx);
         file.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         form.Add(file, "file", "pricelist.xlsx");
         form.Add(new StringContent(fileName), "file_name");
+        if (!string.IsNullOrWhiteSpace(section))
+            form.Add(new StringContent(section), "section");
         using var response = await SendAsync(() => http.PostAsync($"/api/suppliers/{Uri.EscapeDataString(id)}/pricelist", form, ct), ct);
         return await ReadSupplierAsync(response, ct);
+    }
+
+    public async Task<Supplier> UpdateSupplierAsync(string id, SupplierUpdate update, CancellationToken ct)
+    {
+        using var response = await SendAsync(() => http.PutAsJsonAsync($"/api/suppliers/{Uri.EscapeDataString(id)}", update, Json, ct), ct);
+        return await ReadSupplierAsync(response, ct);
+    }
+
+    public async Task<IndexationInfo> GetIndexationAsync(CancellationToken ct)
+    {
+        using var response = await SendAsync(() => http.GetAsync("/api/indexation", ct), ct);
+        return await response.Content.ReadFromJsonAsync<IndexationInfo>(Json, ct) ?? new IndexationInfo();
+    }
+
+    public async Task<IndexationInfo> SetIndexationAsync(IndexationRates rates, CancellationToken ct)
+    {
+        using var response = await SendAsync(() => http.PutAsJsonAsync("/api/indexation", rates, Json, ct), ct);
+        return await response.Content.ReadFromJsonAsync<IndexationInfo>(Json, ct) ?? new IndexationInfo();
     }
 
     public async Task<IReadOnlyList<SupplierOffer>> SampleOffersAsync(string id, CancellationToken ct)

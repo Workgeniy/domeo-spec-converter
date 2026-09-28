@@ -54,7 +54,7 @@ public sealed class AddSupplierHandler(IPricingEngine engine)
         if (site.Length > 0 && !IsSite(site))
             throw new ValidationFailedException("Адрес сайта должен быть вида https://example.ru.");
         var pages = Math.Clamp(body.MaxPages <= 0 ? 3000 : body.MaxPages, 50, 50_000);
-        return await engine.AddSupplierAsync(new SupplierCreate(name, site, pages), ct);
+        return await engine.AddSupplierAsync(new SupplierCreate(name, site, pages, Sections.Clean(body.Sections)), ct);
     }
 
     private static bool IsSite(string site)
@@ -66,10 +66,59 @@ public sealed class AddSupplierHandler(IPricingEngine engine)
     }
 }
 
-/// <summary>Сценарий «загрузить прайс-лист поставщика».</summary>
+/// <summary>Разделы КП у поставщика и прайса: короткие названия без дублей.</summary>
+public static class Sections
+{
+    public const int MaxLength = 60;
+    public const int MaxCount = 30;
+
+    public static IReadOnlyList<string> Clean(IReadOnlyList<string>? sections)
+    {
+        var result = new List<string>();
+        foreach (var raw in sections ?? [])
+        {
+            var section = string.Join(' ', (raw ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries));
+            if (section.Length == 0)
+                continue;
+            if (section.Length > MaxLength)
+                throw new ValidationFailedException($"Название раздела длиннее {MaxLength} символов.");
+            if (!result.Any(s => string.Equals(s, section, StringComparison.OrdinalIgnoreCase)))
+                result.Add(section);
+        }
+        if (result.Count > MaxCount)
+            throw new ValidationFailedException($"Разделов не больше {MaxCount}.");
+        return result;
+    }
+
+    public static string CleanOne(string? section)
+    {
+        var cleaned = Clean(section is null ? null : [section]);
+        return cleaned.Count == 0 ? "" : cleaned[0];
+    }
+}
+
+/// <summary>Сценарий «изменить поставщика»: название, разделы, глубина обхода.</summary>
+public sealed class UpdateSupplierHandler(IPricingEngine engine)
+{
+    public async Task<Supplier> HandleAsync(string id, SupplierUpdate body, CancellationToken ct)
+    {
+        string? name = null;
+        if (body.Name is not null)
+        {
+            name = body.Name.Trim();
+            if (name.Length == 0 || name.Length > AddSupplierHandler.MaxNameLength)
+                throw new ValidationFailedException("Название поставщика — от 1 до 120 символов.");
+        }
+        var sections = body.Sections is null ? null : Sections.Clean(body.Sections);
+        int? pages = body.MaxPages is null ? null : Math.Clamp(body.MaxPages.Value, 50, 50_000);
+        return await engine.UpdateSupplierAsync(id, new SupplierUpdate(name, sections, pages), ct);
+    }
+}
+
+/// <summary>Сценарий «загрузить прайс-лист поставщика» (весь или по разделу).</summary>
 public sealed class UploadSupplierPriceListHandler(IPricingEngine engine)
 {
-    public async Task<Supplier> HandleAsync(string id, Stream xlsx, string fileName, long length, CancellationToken ct)
+    public async Task<Supplier> HandleAsync(string id, Stream xlsx, string fileName, long length, string? section, CancellationToken ct)
     {
         var ok = fileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase) || fileName.EndsWith(".xlsm", StringComparison.OrdinalIgnoreCase);
         if (string.IsNullOrWhiteSpace(fileName) || !ok)
@@ -78,7 +127,30 @@ public sealed class UploadSupplierPriceListHandler(IPricingEngine engine)
             throw new ValidationFailedException("Файл пустой.");
         if (length > UploadPriceListHandler.MaxFileBytes)
             throw new ValidationFailedException("Файл больше 100 МБ.");
-        return await engine.UploadSupplierPriceListAsync(id, xlsx, fileName, ct);
+        return await engine.UploadSupplierPriceListAsync(id, xlsx, fileName, Sections.CleanOne(section), ct);
+    }
+}
+
+/// <summary>Сценарий «сохранить ставки индексации по разделам».</summary>
+public sealed class SetIndexationHandler(IPricingEngine engine)
+{
+    private static readonly HashSet<string> Sources = ["history", "supplier", "official", "manual"];
+
+    public async Task<IndexationInfo> HandleAsync(IndexationRates body, CancellationToken ct)
+    {
+        var cleaned = new List<IndexationRate>();
+        foreach (var rate in body.Rates ?? [])
+        {
+            if (rate.Rate is < -50 or > 200 || double.IsNaN(rate.Rate))
+                throw new ValidationFailedException("Ставка индексации — от −50 до 200 % в год.");
+            if (!Sources.Contains(rate.Source))
+                throw new ValidationFailedException("Источник ставки: history, supplier, official или manual.");
+            var section = Sections.CleanOne(rate.Section);
+            if (cleaned.Any(r => string.Equals(r.Section, section, StringComparison.OrdinalIgnoreCase)))
+                throw new ValidationFailedException($"Раздел «{section}» указан дважды.");
+            cleaned.Add(rate with { Section = section, Note = (rate.Note ?? "").Trim() });
+        }
+        return await engine.SetIndexationAsync(new IndexationRates(cleaned), ct);
     }
 }
 

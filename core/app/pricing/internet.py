@@ -52,7 +52,7 @@ class PriceSearchProvider(Protocol):
     name: str
     model: str
 
-    def lookup(self, name: str, description: str, unit: str, today: str) -> InternetLookup: ...
+    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "") -> InternetLookup: ...
 
 
 def today_moscow() -> str:
@@ -154,7 +154,7 @@ class ClaudeWebSearchProvider:
         self.effort = effort
         self.max_searches = max_searches
 
-    def lookup(self, name: str, description: str, unit: str, today: str) -> InternetLookup:
+    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "") -> InternetLookup:
         query = build_query(name, description)
         prompt = (
             f"Позиция спецификации: {name.strip()}\n"
@@ -213,7 +213,7 @@ class FakePriceProvider:
     name = "fake"
     model = "тестовые данные"
 
-    def lookup(self, name: str, description: str, unit: str, today: str) -> InternetLookup:
+    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "") -> InternetLookup:
         import hashlib
 
         seed = int(hashlib.md5(normalize_name(name).encode("utf-8")).hexdigest()[:6], 16)  # noqa: S324 — не криптография
@@ -247,8 +247,8 @@ class SupplierIndexProvider:
     def model(self) -> str:
         return self.index.description
 
-    def lookup(self, name: str, description: str, unit: str, today: str) -> InternetLookup:
-        return self.index.lookup(name, description, unit, today)
+    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "") -> InternetLookup:
+        return self.index.lookup(name, description, unit, today, section)
 
 
 class AutoSearchProvider:
@@ -270,8 +270,8 @@ class AutoSearchProvider:
         engine = f"автопоиск через {self.web.engine.name}, пока меньше {self.index.min_shops} магазинов" if self.web is not None else "автопоиск выключен"
         return f"{self.index.description}; {engine}"
 
-    def lookup(self, name: str, description: str, unit: str, today: str) -> InternetLookup:
-        ranked = self.index.rank(name, description)
+    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "") -> InternetLookup:
+        ranked = self.index.rank(name, description, section)
         base = self.index.build_lookup(ranked, name, description, today)
         base.provider = self.name
         shops_before = self.index.matched_shops(ranked)
@@ -282,7 +282,7 @@ class AutoSearchProvider:
         except Exception as exc:  # noqa: BLE001 — сбой поисковика не должен ронять пачку
             base.comment = f"{base.comment}; автопоиск не ответил: {str(exc)[:120]}".strip("; ")
             return base
-        ranked = self.index.rank(name, description)
+        ranked = self.index.rank(name, description, section)
         result = self.index.build_lookup(ranked, name, description, today)
         result.provider = self.name
         if self.index.matched_shops(ranked) <= shops_before:
@@ -420,7 +420,7 @@ class InternetPriceService:
     def _lookup_one(self, item: MatchRequestItem, today: str) -> InternetLookup:
         assert self.provider is not None
         try:
-            return self.provider.lookup(item.name, item.description, getattr(item, "unit", "") or "", today)
+            return self.provider.lookup(item.name, item.description, item.unit or "", today, item.section or "")
         except Exception as exc:  # noqa: BLE001 — одна неудача не должна валить всю пачку
             return InternetLookup(
                 status="error",

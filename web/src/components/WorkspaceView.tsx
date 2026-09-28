@@ -16,7 +16,7 @@ import { SummaryTable } from './SummaryTable'
 import { UploadPane } from './UploadPane'
 
 export function WorkspaceView() {
-  const { title, documents, kp, setTitle, addDocument, removeDocument, clear } = useWorkspace()
+  const { title, documents, kp, indexation, setTitle, addDocument, removeDocument, clear } = useWorkspace()
   const [adding, setAdding] = useState(false)
   const [downloading, setDownloading] = useState(false)
 
@@ -24,7 +24,7 @@ export function WorkspaceView() {
     const items = documents.reduce((n, d) => n + d.doc.items.length, 0)
     const rows = documents.flatMap((d) => d.doc.summary)
     const active = rows.filter((r) => !r.excluded)
-    const totals = kpTotals(active, kp)
+    const totals = kpTotals(active, kp, indexation)
     const warnings = documents.reduce(
       (n, d) =>
         n +
@@ -35,14 +35,14 @@ export function WorkspaceView() {
       0,
     )
     return { items, positions: active.length, excluded: rows.length - active.length, priced: totals.priced, total: totals.total, warnings }
-  }, [documents, kp])
+  }, [documents, kp, indexation])
 
   // kp — приложения к договору по образцу (листы «1» и «2»); cost — себестоимость для Домео;
   // working — рабочая выгрузка (свод, по помещениям, проверка).
   async function download(docs: WorkspaceDocument[], kind: ExportKind = 'kp') {
     setDownloading(true)
     try {
-      const { blob, fileName } = await exportExcel(buildExportRequest(title, docs, kp, kind))
+      const { blob, fileName } = await exportExcel(buildExportRequest(title, docs, kp, kind, indexation))
       downloadBlob(blob, fileName)
     } catch (e) {
       notifications.show({ color: 'red', title: 'Не удалось сформировать Excel', message: e instanceof Error ? e.message : String(e) })

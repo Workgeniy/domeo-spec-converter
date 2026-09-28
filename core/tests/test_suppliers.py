@@ -248,25 +248,36 @@ def test_supplier_endpoints_and_lookup(tmp_path: Path) -> None:
         assert client.post(f"/api/suppliers/{sid}/crawl").status_code == 400  # сайта нет
         assert client.post("/api/suppliers/nope/crawl").status_code == 404
 
+        updated = client.put(f"/api/suppliers/{sid}", json={"sections": ["Мебель", " мебель", "Пищеблок"], "name": " Прайсовый  поставщик "})
+        assert updated.status_code == 200 and updated.json()["sections"] == ["Мебель", "Пищеблок"] and updated.json()["name"] == "Прайсовый поставщик"
+
         _price_list(tmp_path / "прайс.xlsx")
         with open(tmp_path / "прайс.xlsx", "rb") as f:
-            upload = client.post(f"/api/suppliers/{sid}/pricelist", files={"file": ("p.xlsx", f, "application/octet-stream")}, data={"file_name": "прайс сентябрь.xlsx"})
-        assert upload.status_code == 200 and upload.json()["offers"] == 2 and upload.json()["source"] == "прайс прайс сентябрь.xlsx"
+            upload = client.post(f"/api/suppliers/{sid}/pricelist", files={"file": ("p.xlsx", f, "application/octet-stream")}, data={"file_name": "прайс сентябрь.xlsx", "section": "Мебель"})
+        assert upload.status_code == 200 and upload.json()["offers"] == 2 and upload.json()["source"] == "прайс «Мебель» прайс сентябрь.xlsx"
         listed = client.get("/api/suppliers").json()
         assert listed["offers"] == 2 and listed["suppliers"][0]["status"] == "done"
-        assert len(client.get(f"/api/suppliers/{sid}/sample").json()["offers"]) == 2
+        sample = client.get(f"/api/suppliers/{sid}/sample").json()["offers"]
+        assert len(sample) == 2 and all(o["section"] == "Мебель" for o in sample)
+        # Прайс другого раздела добавляется, а не затирает мебель.
+        _price_list(tmp_path / "спорт.xlsx", with_header=False)
+        with open(tmp_path / "спорт.xlsx", "rb") as f:
+            sport = client.post(f"/api/suppliers/{sid}/pricelist", files={"file": ("s.xlsx", f, "application/octet-stream")}, data={"section": "Спорт"})
+        assert sport.status_code == 200 and sport.json()["offers"] == 5 and sport.json()["sections"] == ["Мебель", "Пищеблок", "Спорт"]
 
         info = client.get("/api/internet").json()
-        assert info["configured"] and info["provider"] == "suppliers" and "2 позиций" in info["model"]
-        lookup = client.post("/api/internet/lookup", json={"items": [{"id": "r1", "name": "Стул детский регулируемый по высоте", "unit": "шт."}, {"id": "r2", "name": "Ножничный подъёмник"}]})
+        assert info["configured"] and info["provider"] == "suppliers" and "5 позиций" in info["model"]
+        lookup = client.post("/api/internet/lookup", json={"items": [{"id": "r1", "name": "Стул детский регулируемый по высоте", "unit": "шт.", "section": "Мебель"}, {"id": "r2", "name": "Ножничный подъёмник"}]})
         assert lookup.status_code == 200
         lookups = lookup.json()["lookups"]
         assert lookups["r1"]["status"] == "found" and lookups["r1"]["price"] == 950 and lookups["r1"]["offers"][0]["shop"] == "Прайсовый поставщик"
+        assert "раздел «Мебель»" in lookups["r1"]["offers"][0]["note"]
         assert lookups["r2"]["status"] == "not_found"
         assert not (tmp_path / "internet_prices.json").exists()  # индекс не кэшируется
 
         assert client.delete(f"/api/suppliers/{sid}").status_code == 204
         assert client.get("/api/suppliers").json()["suppliers"] == []
+        assert client.put(f"/api/suppliers/{sid}", json={"name": "x"}).status_code == 404
     finally:
         supplier_index.dir, suppliers, offers, internet_prices.provider = saved
         supplier_index.suppliers.clear()

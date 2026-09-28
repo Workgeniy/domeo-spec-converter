@@ -20,6 +20,8 @@ from .env import load_env_file
 from .export.excel import build_workbook
 from .models import (
     ExportRequest,
+    IndexationInfo,
+    IndexationRates,
     InternetLookupRequest,
     InternetLookupResponse,
     InternetSearchInfo,
@@ -32,9 +34,11 @@ from .models import (
     SupplierIndexInfo,
     SupplierSample,
     SupplierSettings,
+    SupplierUpdate,
 )
 from .parsing.ocr import default_provider
 from .parsing.spec_parser import parse_pdf
+from .pricing.indexation import IndexationStore, history_indexation
 from .pricing.internet import InternetPriceService
 from .pricing.store import PriceListStore
 from .pricing.suppliers.discovery import WebPriceSearch
@@ -46,6 +50,7 @@ MAX_INTERNET_ITEMS = 50  # поиск — долгий (десятки секу�
 
 load_env_file()  # ключи для локального запуска — из core/.env, если он есть
 price_lists = PriceListStore()
+indexation_rates = IndexationStore()
 supplier_index = SupplierIndex()
 search_engine = engine_from_env()
 web_search = WebPriceSearch(search_engine, supplier_index) if search_engine is not None else None
@@ -57,6 +62,7 @@ internet_prices = InternetPriceService.from_env(supplier_index, web_search)
 async def lifespan(_: FastAPI):
     # Прайс закупки, индекс поставщиков и кэши, накопленные раньше, подхватываются при старте.
     price_lists.load()
+    indexation_rates.load()
     supplier_index.load()
     if web_search is not None:
         web_search.load()
@@ -104,9 +110,33 @@ def suppliers_settings(body: SupplierSettings) -> SupplierIndexInfo:
 @app.post("/api/suppliers", response_model=Supplier)
 def suppliers_add(body: SupplierCreate) -> Supplier:
     try:
-        return supplier_index.add(body.name, body.site, body.max_pages)
+        return supplier_index.add(body.name, body.site, body.max_pages, body.sections)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.put("/api/suppliers/{supplier_id}", response_model=Supplier)
+def suppliers_update(supplier_id: str, body: SupplierUpdate) -> Supplier:
+    """Название, разделы и глубина обхода поставщика."""
+    _supplier_or_404(supplier_id)
+    return supplier_index.update(supplier_id, body.name, body.sections, body.max_pages)
+
+
+# ---------- индексация цен к дате поставки ----------
+
+
+@app.get("/api/indexation", response_model=IndexationInfo)
+def indexation_info() -> IndexationInfo:
+    """Рост цен по истории закупок (если она загружена) и ставки, выбранные оператором."""
+    history = history_indexation(price_lists.price_list) if price_lists.price_list is not None else None
+    return IndexationInfo(history=history, rates=indexation_rates.list())
+
+
+@app.put("/api/indexation", response_model=IndexationInfo)
+def indexation_set(body: IndexationRates) -> IndexationInfo:
+    """Справочник ставок по разделам заменяется целиком."""
+    indexation_rates.set_rates(body.rates)
+    return indexation_info()
 
 
 @app.delete("/api/suppliers/{supplier_id}", status_code=204)
@@ -138,8 +168,8 @@ def suppliers_stop(supplier_id: str) -> Supplier:
 
 
 @app.post("/api/suppliers/{supplier_id}/pricelist", response_model=Supplier)
-def suppliers_pricelist(supplier_id: str, file: UploadFile = File(...), file_name: str | None = Form(None)) -> Supplier:
-    """Прайс-лист поставщика (xlsx) заменяет его предложения в индексе."""
+def suppliers_pricelist(supplier_id: str, file: UploadFile = File(...), file_name: str | None = Form(None), section: str | None = Form(None)) -> Supplier:
+    """Прайс-лист поставщика (xlsx). С разделом заменяет цены только этого раздела, без — все."""
     _supplier_or_404(supplier_id)
     name = file_name or file.filename or "прайс.xlsx"
     if not name.lower().endswith((".xlsx", ".xlsm")):
@@ -148,7 +178,7 @@ def suppliers_pricelist(supplier_id: str, file: UploadFile = File(...), file_nam
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "Файл больше 100 МБ")
     try:
-        return supplier_index.import_price_list(supplier_id, content, name)
+        return supplier_index.import_price_list(supplier_id, content, name, section or "")
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

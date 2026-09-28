@@ -48,6 +48,7 @@ def _host(site: str) -> str:
 
 PARAM_MATCH_BONUS = 0.1
 PARAM_CONFLICT_FACTOR = 0.75
+SECTION_BONUS = 0.05
 NOTE_PARAMS_MATCH = "параметры совпали"
 NOTE_PARAMS_CONFLICT = "параметры не совпали"
 NOTE_PARAMS_UNKNOWN = "параметры не указаны"
@@ -78,12 +79,13 @@ class OfferMatcher:
             for t in toks:
                 self.index[t].add(i)
 
-    def search(self, name: str, description: str = "") -> list[Ranked]:
+    def search(self, name: str, description: str = "", section: str = "") -> list[Ranked]:
         key = normalize_name(name)
         query = tokens(name)
         if not query:
             return []
         spec = extract_params(f"{name} {description}")
+        section_key = section.strip().lower()
         ranked: list[Ranked] = []
         seen: set[int] = set()
         for t in query:
@@ -92,6 +94,8 @@ class OfferMatcher:
                     continue
                 seen.add(i)
                 score = self._score(key, query, i)
+                if section_key and self.offers[i].section and self.offers[i].section.strip().lower() == section_key:
+                    score = min(1.0, round(score + SECTION_BONUS, 3))  # прайс того же раздела — чуть надёжнее
                 note = ""
                 if not spec.empty():
                     matches, conflicts = compare_params(spec, self.offer_params[i])
@@ -203,14 +207,35 @@ class SupplierIndex:
         self.save()
         return self.info()
 
-    def add(self, name: str, site: str = "", max_pages: int = 3000) -> Supplier:
+    def add(self, name: str, site: str = "", max_pages: int = 3000, sections: list[str] | None = None) -> Supplier:
         name = " ".join(name.split())
         if not name:
             raise ValueError("не указано название поставщика")
         site = normalize_site(site) if site.strip() else ""
-        supplier = Supplier(id=uuid.uuid4().hex[:8], name=name, site=site, kind="site" if site else "pricelist", max_pages=max(50, min(max_pages, 50_000)))
+        supplier = Supplier(
+            id=uuid.uuid4().hex[:8],
+            name=name,
+            site=site,
+            kind="site" if site else "pricelist",
+            max_pages=max(50, min(max_pages, 50_000)),
+            sections=_clean_sections(sections),
+        )
         with self._lock:
             self.suppliers[supplier.id] = supplier
+        self.save()
+        return supplier
+
+    def update(self, supplier_id: str, name: str | None = None, sections: list[str] | None = None, max_pages: int | None = None) -> Supplier:
+        supplier = self.get(supplier_id)
+        with self._lock:
+            if name is not None and " ".join(name.split()):
+                supplier.name = " ".join(name.split())
+                for offer in self.offers.get(supplier_id, []):
+                    offer.supplier = supplier.name
+            if sections is not None:
+                supplier.sections = _clean_sections(sections)
+            if max_pages is not None:
+                supplier.max_pages = max(50, min(int(max_pages), 50_000))
         self.save()
         return supplier
 
@@ -246,27 +271,43 @@ class SupplierIndex:
 
     # ---------- предложения ----------
 
-    def _to_offers(self, supplier: Supplier, extracted: list[Extracted], today: str, seen: set[tuple[str, float]]) -> list[SupplierOffer]:
+    def _to_offers(self, supplier: Supplier, extracted: list[Extracted], today: str, seen: set[tuple[str, float]], section: str = "") -> list[SupplierOffer]:
         offers: list[SupplierOffer] = []
         for e in extracted:
             key = (normalize_name(e.name), e.price)
             if not e.name or e.price <= 0 or key in seen:
                 continue
             seen.add(key)
-            offers.append(SupplierOffer(supplier_id=supplier.id, supplier=supplier.name, name=e.name[:300], price=e.price, url=e.url[:500], sku=e.sku[:100], collected_at=today))
+            offers.append(
+                SupplierOffer(supplier_id=supplier.id, supplier=supplier.name, name=e.name[:300], price=e.price, url=e.url[:500], sku=e.sku[:100], collected_at=today, section=section)
+            )
         return offers
 
-    def set_offers(self, supplier_id: str, extracted: list[Extracted], source: str, kind: str | None = None, crawled: bool | None = None, keep_existing: bool = False) -> Supplier:
+    def set_offers(
+        self,
+        supplier_id: str,
+        extracted: list[Extracted],
+        source: str,
+        kind: str | None = None,
+        crawled: bool | None = None,
+        keep_existing: bool = False,
+        section: str = "",
+    ) -> Supplier:
         """Заменить предложения поставщика (обход, прайс). keep_existing — старые предложения с
         другими названиями остаются (страницы из автопоиска, не попавшие в обход)."""
         supplier = self.get(supplier_id)
         today = _today()
         with self._lock:
             seen: set[tuple[str, float]] = set()
-            offers = self._to_offers(supplier, extracted, today, seen)
+            offers = self._to_offers(supplier, extracted, today, seen, section)
             if keep_existing:
-                old = [Extracted(name=o.name, price=o.price, url=o.url, sku=o.sku) for o in self.offers.get(supplier_id, [])]
-                offers += self._to_offers(supplier, old, today, seen)
+                old = self.offers.get(supplier_id, [])
+                for o in old:
+                    if (normalize_name(o.name), o.price) not in seen:
+                        seen.add((normalize_name(o.name), o.price))
+                        offers.append(o.model_copy(update={"collected_at": today}))
+            if section and section not in supplier.sections:
+                supplier.sections = _clean_sections(supplier.sections + [section])
             self.offers[supplier_id] = offers
             supplier.offers = len(offers)
             supplier.collected_at = today
@@ -326,7 +367,9 @@ class SupplierIndex:
             self.enqueue_crawl(supplier.id)
         return supplier
 
-    def import_price_list(self, supplier_id: str, content: bytes, file_name: str) -> Supplier:
+    def import_price_list(self, supplier_id: str, content: bytes, file_name: str, section: str = "") -> Supplier:
+        """Прайс xlsx. С разделом — заменяет только цены этого раздела (прайсы по разделам
+        приходят от поставщика разными файлами), без раздела — все цены поставщика."""
         suffix = Path(file_name).suffix or ".xlsx"
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(content)
@@ -338,7 +381,14 @@ class SupplierIndex:
         if not extracted:
             raise ValueError("в файле не нашлось строк с названием и ценой")
         supplier = self.get(supplier_id)
-        return self.set_offers(supplier_id, extracted, f"прайс {file_name}", kind=None if supplier.site else "pricelist")
+        section = " ".join(section.split())
+        if section:
+            with self._lock:
+                self.offers[supplier_id] = [o for o in self.offers.get(supplier_id, []) if o.section != section]
+            source = f"прайс «{section}» {file_name}"
+        else:
+            source = f"прайс {file_name}"
+        return self.set_offers(supplier_id, extracted, source, kind=None if supplier.site else "pricelist", keep_existing=bool(section), section=section)
 
     # ---------- обход в фоне ----------
 
@@ -440,19 +490,19 @@ class SupplierIndex:
             total = sum(len(o) for o in self.offers.values())
             return f"каталоги поставщиков: {total} позиций у {len(self.suppliers)} поставщиков"
 
-    def rank(self, name: str, description: str = "") -> list[Ranked]:
+    def rank(self, name: str, description: str = "", section: str = "") -> list[Ranked]:
         """Предложения индекса по убыванию совпадения (не ниже порога «похоже»); параметры из
-        характеристик подтверждают или отводят совпадение."""
+        характеристик подтверждают или отводят совпадение, прайс того же раздела — небольшой плюс."""
         with self._lock:
-            return self._matcher.search(name, description)
+            return self._matcher.search(name, description, section)
 
     @staticmethod
     def matched_shops(ranked: list[Ranked]) -> int:
         """Сколько разных магазинов дали ту же позицию (совпадение не ниже MATCH_THRESHOLD)."""
         return len({offer.supplier_id for offer, score, _ in ranked if score >= MATCH_THRESHOLD})
 
-    def lookup(self, name: str, description: str, unit: str, today: str) -> InternetLookup:
-        return self.build_lookup(self.rank(name, description), name, description, today)
+    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "") -> InternetLookup:
+        return self.build_lookup(self.rank(name, description, section), name, description, today)
 
     def build_lookup(self, ranked: list[Ranked], name: str, description: str, today: str) -> InternetLookup:
         query = re.sub(r"\s+", " ", f"{name} {description}".strip())[:300]
@@ -473,6 +523,7 @@ class SupplierIndex:
                     for part in (
                         f"совпадение {round(score * 100)}%",
                         note,
+                        f"раздел «{offer.section}»" if offer.section else "",
                         f"арт. {offer.sku}" if offer.sku else "",
                         f"цена от {offer.collected_at}" if offer.collected_at else "",
                     )
@@ -497,6 +548,17 @@ class SupplierIndex:
         if params_text:
             comment = f"{params_text}; {comment}"
         return InternetLookup(status="found", query=query, looked_up_at=today, offers=offers, price=price, comment=comment, provider="suppliers")
+
+
+def _clean_sections(sections: list[str] | None) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for raw in sections or []:
+        section = " ".join(str(raw).split())[:60]
+        if section and section.lower() not in seen:
+            seen.add(section.lower())
+            result.append(section)
+    return result
 
 
 def _write_json(path: Path, payload: object) -> None:

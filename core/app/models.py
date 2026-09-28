@@ -227,6 +227,7 @@ class ExportRequest(BaseModel):
     # working — рабочая выгрузка; kp — приложения к договору; cost — себестоимость для Домео.
     # Не задано: kp, если есть параметры КП, иначе working (совместимость со старыми клиентами).
     kind: ExportKind | None = None
+    indexation: "Indexation | None" = None  # цены к дате поставки (см. ниже)
 
     def resolved_kind(self) -> ExportKind:
         if self.kind:
@@ -256,6 +257,7 @@ class MatchRequestItem(BaseModel):
     name: str
     description: str = ""
     unit: str = ""  # для поиска в интернете: цена нужна за эту единицу
+    section: str = ""  # раздел КП: прайсы того же раздела чуть надёжнее
 
 
 class MatchRequest(BaseModel):
@@ -311,6 +313,7 @@ class Supplier(BaseModel):
     discovered: bool = False  # найден автопоиском, а не заведён оператором
     query: str = ""  # по какому запросу нашёлся
     crawled: bool = False  # каталог обходили целиком (а не только страницы из поиска)
+    sections: list[str] = Field(default_factory=list)  # разделы КП, которые закрывает поставщик
 
 
 class SupplierOffer(BaseModel):
@@ -323,12 +326,20 @@ class SupplierOffer(BaseModel):
     url: str = ""
     sku: str = ""
     collected_at: str = ""
+    section: str = ""  # раздел прайса, если загружали прайс по разделу
 
 
 class SupplierCreate(BaseModel):
     name: str
     site: str = ""
     max_pages: int = 3000
+    sections: list[str] = Field(default_factory=list)
+
+
+class SupplierUpdate(BaseModel):
+    name: str | None = None
+    sections: list[str] | None = None
+    max_pages: int | None = None
 
 
 class SupplierIndexInfo(BaseModel):
@@ -348,3 +359,59 @@ class SupplierSettings(BaseModel):
 
 class SupplierSample(BaseModel):
     offers: list[SupplierOffer] = Field(default_factory=list)
+
+
+# ---------- индексация цен к дате поставки ----------
+
+
+class IndexationPair(BaseModel):
+    """Изменение цен одних и тех же позиций между двумя годами."""
+
+    years: str  # «2024→2025»
+    rate: float  # % за год (медиана по позициям)
+    samples: int  # сколько позиций сравнивалось
+
+
+class IndexationGroup(BaseModel):
+    group: str  # группа из истории закупок или «все группы»
+    rate: float | None = None  # % в год по последним годам; None — данных мало
+    samples: int = 0
+    pairs: list[IndexationPair] = Field(default_factory=list)
+
+
+class HistoryIndexation(BaseModel):
+    """Рост цен по истории закупок: по группам и в целом."""
+
+    overall: IndexationGroup | None = None
+    groups: list[IndexationGroup] = Field(default_factory=list)
+    computed_at: str = ""
+
+
+IndexationSource = Literal["history", "supplier", "official", "manual"]
+
+
+class IndexationRate(BaseModel):
+    """Ставка индексации раздела, выбранная оператором."""
+
+    section: str  # раздел КП; «» — для разделов без своей ставки
+    rate: float = Field(ge=-50, le=200)  # % в год
+    source: IndexationSource = "manual"
+    note: str = ""  # откуда: «ответ поставщика от 12.10», «ИПЦ Росстат» и т. п.
+    updated_at: str = ""
+
+
+class IndexationRates(BaseModel):
+    rates: list[IndexationRate] = Field(default_factory=list)
+
+
+class IndexationInfo(BaseModel):
+    history: HistoryIndexation | None = None  # None — история закупок не загружена
+    rates: list[IndexationRate] = Field(default_factory=list)
+
+
+class Indexation(BaseModel):
+    """Индексация в выгрузке: дата поставки и ставки по разделам (ключ «» — по умолчанию)."""
+
+    date: str = ""  # ГГГГ-ММ-ДД; пусто — без индексации
+    rates: dict[str, float] = Field(default_factory=dict)
+    apply_to_kp: bool = False  # считать КП от проиндексированной базовой цены

@@ -1,7 +1,7 @@
-// Расчёт цен КП для живых итогов в интерфейсе. Зеркало core/app/export/kp.py —
-// менять синхронно: Excel считает ядро, а здесь только предпросмотр.
+// Расчёт цен КП для живых итогов в интерфейсе. Зеркало core/app/export/kp.py и
+// core/app/pricing/indexation.py — менять синхронно: Excel считает ядро, а здесь только предпросмотр.
 
-import type { KpSettings, SummaryItem } from './api'
+import type { Indexation, KpSettings, SummaryItem } from './api'
 
 export const DEFAULT_KP: KpSettings = {
   contract_number: '',
@@ -14,6 +14,8 @@ export const DEFAULT_KP: KpSettings = {
   installation_percent: 0,
   round_to_ruble: false,
 }
+
+export const DEFAULT_INDEXATION: Indexation = { date: '', rates: {}, apply_to_kp: false }
 
 export interface RowPrice {
   /** Цена товара за единицу в КП, с НДС (доставка внутри). */
@@ -36,6 +38,47 @@ export function priceRow(base: number, s: KpSettings, withInstallation = true): 
   return { sale, installation, unitTotal: roundTo(sale + installation, digits) }
 }
 
+// ---------- индексация к дате поставки ----------
+
+export function todayISO(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/** Доля лет между датами по дням; в прошлое — ноль (цены задним числом не индексируем). */
+export function yearsBetween(fromISO: string, toISO: string): number {
+  const from = Date.parse(fromISO)
+  const to = Date.parse(toISO)
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return 0
+  return Math.max(0, (to - from) / 86_400_000 / 365.25)
+}
+
+/** Ставка раздела; если своей нет — общая (ключ «»); если и её нет — null. */
+export function rateFor(section: string, rates: Record<string, number>): number | null {
+  if (section in rates) return rates[section]
+  const key = section.trim().toLowerCase()
+  for (const [name, rate] of Object.entries(rates)) {
+    if (name.trim().toLowerCase() === key) return rate
+  }
+  return '' in rates ? rates[''] : null
+}
+
+/** Цена к дате поставки: base × (1 + ставка/100) ^ (лет до даты). Без даты или ставки — как есть. */
+export function indexedPrice(price: number, section: string, ix: Indexation, from = todayISO()): number {
+  if (!ix.date) return price
+  const rate = rateFor(section, ix.rates)
+  if (rate === null) return price
+  return roundTo(price * (1 + rate / 100) ** yearsBetween(from, ix.date), 2)
+}
+
+type Row = Pick<SummaryItem, 'price' | 'qty'> & { installation?: boolean; section?: string }
+
+/** Базовая цена строки для КП: проиндексированная, если так настроено. */
+export function kpBase(row: Row, ix?: Indexation): number | null {
+  if (row.price === null) return null
+  return ix?.apply_to_kp ? indexedPrice(row.price, row.section ?? '', ix) : row.price
+}
+
 export interface KpTotals {
   positions: number
   /** Позиций на листе «1» (с монтажом) и «2» (инвентарь). */
@@ -49,9 +92,7 @@ export interface KpTotals {
   total: number
 }
 
-type Row = Pick<SummaryItem, 'price' | 'qty'> & { installation?: boolean }
-
-export function kpTotals(rows: Row[], s: KpSettings): KpTotals {
+export function kpTotals(rows: Row[], s: KpSettings, ix?: Indexation): KpTotals {
   let goods = 0
   let installation = 0
   let priced = 0
@@ -59,8 +100,9 @@ export function kpTotals(rows: Row[], s: KpSettings): KpTotals {
   for (const row of rows) {
     const withInstallation = row.installation ?? true
     if (withInstallation) mounted += 1
-    if (row.price === null || row.qty === null) continue
-    const p = priceRow(row.price, s, withInstallation)
+    const base = kpBase(row, ix)
+    if (base === null || row.qty === null) continue
+    const p = priceRow(base, s, withInstallation)
     priced += 1
     goods += p.sale * row.qty
     installation += p.installation * row.qty

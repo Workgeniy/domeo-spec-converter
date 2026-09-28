@@ -4,8 +4,8 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-import type { HistoryPrice, InternetLookup, InternetOffer, KpSettings, ParsedDocument, PriceSource, SummaryItem } from './api'
-import { DEFAULT_KP } from './kp'
+import type { HistoryPrice, Indexation, InternetLookup, InternetOffer, KpSettings, ParsedDocument, PriceSource, SummaryItem } from './api'
+import { DEFAULT_INDEXATION, DEFAULT_KP } from './kp'
 
 /** Строка свода с клиентскими пометками, которых нет в модели ядра. */
 export interface SummaryRow extends SummaryItem {
@@ -30,6 +30,9 @@ interface WorkspaceState {
   title: string
   documents: WorkspaceDocument[]
   kp: KpSettings
+  /** Индексация к дате поставки: дата — у объекта, ставки — копия справочника с сервера. */
+  indexation: Indexation
+  setIndexation: (patch: Partial<Indexation>) => void
   setTitle: (title: string) => void
   addDocument: (doc: ParsedDocument) => void
   removeDocument: (id: string) => void
@@ -119,6 +122,8 @@ export const useWorkspace = create<WorkspaceState>()(
       title: '',
       documents: [],
       kp: DEFAULT_KP,
+      indexation: DEFAULT_INDEXATION,
+      setIndexation: (patch) => set((s) => ({ indexation: { ...s.indexation, ...patch } })),
       setTitle: (title) => set({ title }),
       addDocument: (doc) =>
         set((s) => ({
@@ -202,13 +207,23 @@ export const useWorkspace = create<WorkspaceState>()(
       setKp: (patch) => set((s) => ({ kp: { ...s.kp, ...patch } })),
       // Правила расчёта и должности — свои у компании, они переживают смену объекта;
       // сбрасываются только данные конкретного объекта (договор).
-      clear: () => set((s) => ({ title: '', documents: [], kp: { ...s.kp, contract_number: '', contract_date: '' } })),
+      // Дата поставки — у объекта, ставки индексации — справочник компании, остаются.
+      clear: () =>
+        set((s) => ({
+          title: '',
+          documents: [],
+          kp: { ...s.kp, contract_number: '', contract_date: '' },
+          indexation: { ...s.indexation, date: '', apply_to_kp: false },
+        })),
     }),
     {
       name: 'domeo-spec-workspace',
-      version: 6,
+      version: 7,
       migrate: (persisted, version) => {
         let state = persisted as Partial<WorkspaceState>
+        if (version < 7) {
+          state = { ...state, indexation: state.indexation ?? DEFAULT_INDEXATION }
+        }
         if (version < 6 && state.documents) {
           // v6: у строк свода появился результат поиска в интернете.
           state = {

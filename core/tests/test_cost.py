@@ -6,9 +6,13 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
+from datetime import date, timedelta
+
 from app.export.excel import build_workbook
+from app.export.kp import round_half_up
 from app.main import app, price_lists
-from app.models import ExportRequest, HistoryCandidate, HistoryPrice, HistoryPurchase, SummaryItem
+from app.models import ExportRequest, HistoryCandidate, HistoryPrice, HistoryPurchase, Indexation, KpSettings, SummaryItem
+from app.pricing.indexation import indexation_factor
 
 client = TestClient(app)
 
@@ -42,6 +46,48 @@ def test_cost_workbook_has_three_price_columns_and_choice() -> None:
     buffer = io.BytesIO()
     wb.save(buffer)
     load_workbook(io.BytesIO(buffer.getvalue()))
+
+
+def test_cost_sheet_indexes_prices_to_delivery_date() -> None:
+    delivery = (date.today() + timedelta(days=365)).isoformat()
+    data = ExportRequest(
+        title="Объект",
+        kind="cost",
+        indexation=Indexation(date=delivery, rates={"Мебель": 5.0, "": 3.0}),
+        summary=[
+            SummaryItem(pos="1", section="Мебель", name="Стул", unit="шт.", qty=10, price=1000),
+            SummaryItem(pos="2", section="Пищеблок", name="Плита", unit="шт.", qty=1, price=50000),
+            SummaryItem(pos="3", section="Мебель", name="Без цены", unit="шт.", qty=1, price=None),
+        ],
+    )
+    wb = build_workbook(data)
+    ws = wb["Себестоимость"]
+    assert (ws.cell(2, 18).value, ws.cell(2, 19).value, ws.cell(2, 20).value) == ("Индексация, % в год", f"Цена на {delivery}", f"Стоимость на {delivery}")
+    assert ws["R3"].value == 5.0 and ws["S3"].value.startswith("=ROUND(O3*(1+R3/100)^") and ws["T3"].value == "=F3*S3"
+    assert ws["R4"].value == 3.0  # раздела «Пищеблок» в ставках нет — общая
+    assert ws["S5"].value is None and ws["T5"].value is None  # без цены нечего индексировать
+    assert (ws["S6"].value, ws["T6"].value) == (f"Итого на {delivery}", "=SUM(T3:T5)")
+    assert "проиндексированы" in ws["A1"].value
+    # Без даты — прежние 17 граф.
+    plain = build_workbook(ExportRequest(kind="cost", summary=[SummaryItem(pos="1", name="Стул", qty=1, price=1)]))["Себестоимость"]
+    assert plain.cell(2, 18).value is None and plain.auto_filter.ref.startswith("A2:Q")
+
+
+def test_kp_uses_indexed_base_price_when_asked() -> None:
+    delivery = date.today() + timedelta(days=365)
+    kp = KpSettings()
+    item = SummaryItem(pos="1", section="Мебель", name="Стул", unit="шт.", qty=2, price=1000, installation=False)
+    with_indexation = ExportRequest(kind="kp", kp=kp, indexation=Indexation(date=delivery.isoformat(), rates={"": 10.0}, apply_to_kp=True), summary=[item])
+    without = ExportRequest(kind="kp", kp=kp, indexation=Indexation(date=delivery.isoformat(), rates={"": 10.0}, apply_to_kp=False), summary=[item])
+
+    def price_cell(request: ExportRequest) -> float:
+        ws = build_workbook(request)["2"]
+        row = next(r for r in range(1, ws.max_row + 1) if ws.cell(r, 1).value == 1)
+        return ws.cell(row, 11).value  # графа K листа «2» — цена за ед. с НДС
+
+    expected = round_half_up(1000 * indexation_factor(10.0, date.today(), delivery), 2)
+    assert price_cell(with_indexation) == expected and 1090 < expected < 1101
+    assert price_cell(without) == 1000
 
 
 def test_export_kind_defaults_keep_old_behaviour() -> None:

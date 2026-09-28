@@ -23,6 +23,8 @@ public sealed record ParsedDocument
     public KpSettings? Kp { get; init; }
     /// <summary>Вид выгрузки: working, kp или cost (себестоимость); null — kp при наличии параметров, иначе working.</summary>
     public string? Kind { get; init; }
+    /// <summary>Только в запросе на выгрузку: индексация цен к дате поставки.</summary>
+    public Indexation? Indexation { get; init; }
 }
 
 /// <summary>Позиция прайса закупки, похожая на позицию спецификации.</summary>
@@ -107,7 +109,62 @@ public sealed record PriceListInfo
     public string? PeriodTo { get; init; }
 }
 
-public sealed record MatchRequestItem(string Id, string Name, string Description = "", string Unit = "");
+public sealed record MatchRequestItem(string Id, string Name, string Description = "", string Unit = "", string Section = "");
+
+/// <summary>Изменение цен одних и тех же позиций между двумя годами.</summary>
+public sealed record IndexationPair
+{
+    public string Years { get; init; } = "";
+    public double Rate { get; init; }
+    public int Samples { get; init; }
+}
+
+public sealed record IndexationGroup
+{
+    public string Group { get; init; } = "";
+    /// <summary>% в год по последним годам; null — данных мало.</summary>
+    public double? Rate { get; init; }
+    public int Samples { get; init; }
+    public IReadOnlyList<IndexationPair> Pairs { get; init; } = [];
+}
+
+/// <summary>Рост цен по истории закупок: по группам и в целом.</summary>
+public sealed record HistoryIndexation
+{
+    public IndexationGroup? Overall { get; init; }
+    public IReadOnlyList<IndexationGroup> Groups { get; init; } = [];
+    public string ComputedAt { get; init; } = "";
+}
+
+/// <summary>Ставка индексации раздела, выбранная оператором.</summary>
+public sealed record IndexationRate
+{
+    /// <summary>Раздел КП; «» — для разделов без своей ставки.</summary>
+    public string Section { get; init; } = "";
+    /// <summary>% в год.</summary>
+    public double Rate { get; init; }
+    /// <summary>history | supplier | official | manual.</summary>
+    public string Source { get; init; } = "manual";
+    public string Note { get; init; } = "";
+    public string UpdatedAt { get; init; } = "";
+}
+
+public sealed record IndexationRates(IReadOnlyList<IndexationRate> Rates);
+
+public sealed record IndexationInfo
+{
+    /// <summary>null — история закупок не загружена.</summary>
+    public HistoryIndexation? History { get; init; }
+    public IReadOnlyList<IndexationRate> Rates { get; init; } = [];
+}
+
+/// <summary>Индексация в выгрузке: дата поставки и ставки по разделам (ключ «» — по умолчанию).</summary>
+public sealed record Indexation
+{
+    public string Date { get; init; } = "";
+    public IReadOnlyDictionary<string, double> Rates { get; init; } = new Dictionary<string, double>();
+    public bool ApplyToKp { get; init; }
+}
 
 /// <summary>Состояние поиска цен в интернете: настроен ли, чем ищем (claude | suppliers | fake), сколько в кэше.</summary>
 public sealed record InternetSearchInfo
@@ -142,6 +199,8 @@ public sealed record Supplier
     public string Query { get; init; } = "";
     /// <summary>Каталог обходили целиком (а не только страницы из поиска).</summary>
     public bool Crawled { get; init; }
+    /// <summary>Разделы КП, которые закрывает поставщик.</summary>
+    public IReadOnlyList<string> Sections { get; init; } = [];
 }
 
 /// <summary>Одна позиция каталога поставщика.</summary>
@@ -154,9 +213,13 @@ public sealed record SupplierOffer
     public string Url { get; init; } = "";
     public string Sku { get; init; } = "";
     public string CollectedAt { get; init; } = "";
+    /// <summary>Раздел прайса, если загружали прайс по разделу.</summary>
+    public string Section { get; init; } = "";
 }
 
-public sealed record SupplierCreate(string Name, string Site = "", int MaxPages = 3000);
+public sealed record SupplierCreate(string Name, string Site = "", int MaxPages = 3000, IReadOnlyList<string>? Sections = null);
+
+public sealed record SupplierUpdate(string? Name = null, IReadOnlyList<string>? Sections = null, int? MaxPages = null);
 
 public sealed record SupplierIndexInfo
 {

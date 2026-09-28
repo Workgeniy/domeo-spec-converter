@@ -25,7 +25,7 @@ class FakeProvider:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def lookup(self, name: str, description: str, unit: str, today: str) -> InternetLookup:
+    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "") -> InternetLookup:
         self.calls.append(name)
         if "нет" in name.lower():
             return InternetLookup(status="not_found", query=name, looked_up_at=today, provider=self.name, comment="ничего похожего")

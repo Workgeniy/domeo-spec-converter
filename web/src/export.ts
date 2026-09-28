@@ -1,4 +1,4 @@
-import type { ExportKind, KpSettings, ParsedDocument, SummaryItem } from './api'
+import type { ExportKind, Indexation, KpSettings, ParsedDocument, SummaryItem } from './api'
 import type { SummaryRow, WorkspaceDocument } from './store'
 
 /** Строка свода без клиентских пометок — в том виде, в каком её понимает ядро. */
@@ -22,13 +22,15 @@ function toSummaryItem(row: SummaryRow): SummaryItem {
  * по образцу (листы «1» и «2»), cost — себестоимость для Домео, working — рабочая выгрузка.
  * Несколько томов одного объекта склеиваются в один документ.
  */
-export function buildExportRequest(title: string, documents: WorkspaceDocument[], kp: KpSettings, kind: ExportKind): ParsedDocument {
+export function buildExportRequest(title: string, documents: WorkspaceDocument[], kp: KpSettings, kind: ExportKind, indexation?: Indexation): ParsedDocument {
   const keep = (doc: WorkspaceDocument) => doc.doc.summary.filter((r) => !r.excluded).map(toSummaryItem)
   const settings = kind === 'kp' ? kp : null
+  // Индексация уходит в ядро только с датой поставки; ставки — копия справочника на момент выгрузки.
+  const dated = indexation && indexation.date ? indexation : null
 
   if (documents.length === 1) {
     const d = documents[0].doc
-    return { ...d, title: title || d.title, summary: keep(documents[0]), kp: settings, kind }
+    return { ...d, title: title || d.title, summary: keep(documents[0]), kp: settings, kind, indexation: dated }
   }
 
   const codes = documents.map((d) => d.doc.doc_code || d.doc.file_name)
@@ -45,6 +47,7 @@ export function buildExportRequest(title: string, documents: WorkspaceDocument[]
     documents: documents.flatMap((d) => d.doc.documents),
     kp: settings,
     kind,
+    indexation: dated,
   }
 }
 

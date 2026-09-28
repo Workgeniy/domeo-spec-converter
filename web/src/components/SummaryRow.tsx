@@ -2,8 +2,8 @@ import { ActionIcon, Autocomplete, Checkbox, HoverCard, NumberInput, ScrollArea,
 import { IconArrowBackUp, IconTrash } from '@tabler/icons-react'
 import { memo } from 'react'
 
-import type { KpSettings } from '../api'
-import { priceRow } from '../kp'
+import type { Indexation, KpSettings } from '../api'
+import { kpBase, priceRow } from '../kp'
 import type { RowKey, SummaryRow as Row } from '../store'
 import { formatMoney, formatQty } from './format'
 
@@ -15,6 +15,7 @@ interface Props {
   showDoc: boolean
   sections: string[]
   kp: KpSettings
+  indexation: Indexation
   onToggle: (key: string) => void
   onChange: (key: RowKey, patch: Partial<Row>) => void
 }
@@ -33,12 +34,15 @@ function shortDocCode(code: string): string {
  * Строка свода. Мемоизирована: при правке одной ячейки в сторе меняется только объект
  * этой строки, остальные строки страницы не перерисовываются.
  */
-export const SummaryRowView = memo(function SummaryRowView({ number, row, rowKey, selected, showDoc, sections, kp, onToggle, onChange }: Props) {
+export const SummaryRowView = memo(function SummaryRowView({ number, row, rowKey, selected, showDoc, sections, kp, indexation, onToggle, onChange }: Props) {
   const key = `${rowKey.docId}:${rowKey.index}`
   const excluded = row.excluded === true
   const hasWarnings = row.warnings.length > 0
   const installation = row.installation ?? true
-  const kpPrice = row.price === null ? null : priceRow(row.price, kp, installation)
+  // База для КП — проиндексированная к дате поставки, если так настроено во вкладке «Себестоимость».
+  const base = kpBase(row, indexation)
+  const indexed = base !== null && row.price !== null && base !== row.price
+  const kpPrice = base === null ? null : priceRow(base, kp, installation)
   const total = kpPrice === null || row.qty === null ? null : kpPrice.unitTotal * row.qty
 
   return (
@@ -166,7 +170,11 @@ export const SummaryRowView = memo(function SummaryRowView({ number, row, rowKey
       </Table.Td>
       <Table.Td>
         <Tooltip
-          label={kpPrice ? `товар ${formatMoney(kpPrice.sale)}${installation ? ` + СМР ${formatMoney(kpPrice.installation)}` : ''}` : 'нет базовой цены'}
+          label={
+            kpPrice
+              ? `товар ${formatMoney(kpPrice.sale)}${installation ? ` + СМР ${formatMoney(kpPrice.installation)}` : ''}${indexed ? ` · база проиндексирована к ${indexation.date}: ${formatMoney(base)}` : ''}`
+              : 'нет базовой цены'
+          }
           disabled={!kpPrice}
         >
           <Text size="sm" ta="right" c={kpPrice === null ? 'dimmed' : undefined}>

@@ -44,15 +44,24 @@ public sealed class SuppliersApiTests : IClassFixture<ApiFactory>
         var crawl = await _client.PostAsync($"/api/specifications/suppliers/{id}/crawl", null);
         Assert.Equal(HttpStatusCode.BadRequest, crawl.StatusCode);  // сайта нет
 
+        var update = await _client.PutAsJsonAsync($"/api/specifications/suppliers/{id}", new { sections = new[] { " Мебель ", "мебель", "Пищеблок" } });
+        Assert.Equal(HttpStatusCode.OK, update.StatusCode);
+        var sections = (await update.Content.ReadFromJsonAsync<JsonNode>())!["data"]!["sections"]!.AsArray().Select(s => s!.GetValue<string>()).ToArray();
+        Assert.Equal(new[] { "Мебель", "Пищеблок" }, sections);
+        var tooLong = await _client.PutAsJsonAsync($"/api/specifications/suppliers/{id}", new { sections = new[] { new string('я', 61) } });
+        Assert.Equal(HttpStatusCode.BadRequest, tooLong.StatusCode);
+
         using var form = new MultipartFormDataContent();
         var file = new ByteArrayContent("PK\u0003\u0004fake"u8.ToArray());
         file.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         form.Add(file, "file", "прайс сентябрь.xlsx");
+        form.Add(new StringContent(" Спорт "), "section");
         var upload = await _client.PostAsync($"/api/specifications/suppliers/{id}/pricelist", form);
         Assert.Equal(HttpStatusCode.OK, upload.StatusCode);
         var uploaded = (await upload.Content.ReadFromJsonAsync<JsonNode>())!["data"]!;
         Assert.Equal(2, uploaded["offers"]!.GetValue<int>());
-        Assert.Equal("прайс прайс сентябрь.xlsx", uploaded["source"]!.GetValue<string>());
+        Assert.Equal("прайс «Спорт» прайс сентябрь.xlsx", uploaded["source"]!.GetValue<string>());
+        Assert.Contains("Спорт", uploaded["sections"]!.AsArray().Select(s => s!.GetValue<string>()));
 
         var list = await _client.GetFromJsonAsync<JsonNode>("/api/specifications/suppliers");
         Assert.Equal(2, list!["data"]!["offers"]!.GetValue<int>());

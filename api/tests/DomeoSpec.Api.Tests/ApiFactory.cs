@@ -122,8 +122,46 @@ public sealed class FakePricing : IPricingEngine
 
     public Task<Supplier> StopCrawlAsync(string id, CancellationToken ct) => Task.FromResult(Replace(Find(id) with { Status = "done", Progress = "" }));
 
-    public Task<Supplier> UploadSupplierPriceListAsync(string id, Stream xlsx, string fileName, CancellationToken ct) =>
-        Task.FromResult(Replace(Find(id) with { Offers = 2, Source = "прайс " + fileName, Status = "done", CollectedAt = "2026-09-25" }));
+    public Task<Supplier> UploadSupplierPriceListAsync(string id, Stream xlsx, string fileName, string section, CancellationToken ct)
+    {
+        var supplier = Find(id);
+        var sections = supplier.Sections.ToList();
+        if (section.Length > 0 && !sections.Contains(section)) sections.Add(section);
+        var source = section.Length > 0 ? $"прайс «{section}» {fileName}" : "прайс " + fileName;
+        return Task.FromResult(Replace(supplier with { Offers = 2, Source = source, Status = "done", CollectedAt = "2026-09-25", Sections = sections }));
+    }
+
+    public Task<Supplier> UpdateSupplierAsync(string id, SupplierUpdate update, CancellationToken ct)
+    {
+        var supplier = Find(id);
+        return Task.FromResult(Replace(supplier with
+        {
+            Name = update.Name ?? supplier.Name,
+            Sections = update.Sections ?? supplier.Sections,
+            MaxPages = update.MaxPages ?? supplier.MaxPages,
+        }));
+    }
+
+    public List<IndexationRate> IndexationRates { get; } = [];
+
+    public Task<IndexationInfo> GetIndexationAsync(CancellationToken ct) =>
+        Task.FromResult(new IndexationInfo
+        {
+            History = new HistoryIndexation
+            {
+                Overall = new IndexationGroup { Group = "все группы", Rate = 3.5, Samples = 714 },
+                Groups = [new IndexationGroup { Group = "Мебель", Rate = 1.0, Samples = 115, Pairs = [new IndexationPair { Years = "2024→2025", Rate = 1.0, Samples = 115 }] }],
+                ComputedAt = "2026-09-28",
+            },
+            Rates = IndexationRates.ToList(),
+        });
+
+    public Task<IndexationInfo> SetIndexationAsync(IndexationRates rates, CancellationToken ct)
+    {
+        IndexationRates.Clear();
+        IndexationRates.AddRange(rates.Rates.Select(r => r with { UpdatedAt = r.UpdatedAt.Length > 0 ? r.UpdatedAt : "2026-09-28" }));
+        return GetIndexationAsync(ct);
+    }
 
     public Task<IReadOnlyList<SupplierOffer>> SampleOffersAsync(string id, CancellationToken ct)
     {

@@ -1,7 +1,27 @@
-import { ActionIcon, Anchor, Badge, Button, FileButton, Group, NumberInput, Paper, Popover, ScrollArea, Stack, Table, Text, TextInput, Tooltip } from '@mantine/core'
+import {
+  ActionIcon,
+  Anchor,
+  Autocomplete,
+  Badge,
+  Button,
+  FileButton,
+  Group,
+  Modal,
+  NumberInput,
+  Paper,
+  Popover,
+  ScrollArea,
+  Stack,
+  Table,
+  TagsInput,
+  Text,
+  Textarea,
+  TextInput,
+  Tooltip,
+} from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { IconEye, IconFileSpreadsheet, IconPlayerStop, IconPlus, IconRefresh, IconTrash } from '@tabler/icons-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { IconEye, IconFileSpreadsheet, IconMail, IconPlayerStop, IconPlus, IconRefresh, IconTags, IconTrash } from '@tabler/icons-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   addSupplier,
@@ -10,18 +30,41 @@ import {
   removeSupplier,
   sampleSupplierOffers,
   stopSupplier,
+  updateSupplier,
   updateSupplierSettings,
   uploadSupplierPriceList,
   type Supplier,
   type SupplierIndexInfo,
   type SupplierOffer,
 } from '../api'
+import { SECTIONS } from '../sections'
+import { useWorkspace } from '../store'
 import { formatMoney } from './format'
 
 const POLL_MS = 3000
 
 function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
+}
+
+/** Письмо поставщику: прайсы по разделам, срок действия цен, плановое изменение — то, что нужно для индексации. */
+export function requestLetter(sections: string[]): string {
+  const list = sections.length > 0 ? sections.map((s) => `— ${s}`).join('\n') : '— (укажите разделы)'
+  return [
+    'Здравствуйте!',
+    '',
+    'Просим направить актуальный прайс-лист по разделам:',
+    list,
+    '',
+    'По каждому разделу просим указать:',
+    '1. Срок действия цен.',
+    '2. Планируемое изменение цен и его дату, если оно известно.',
+    '3. Условия фиксации цены на период поставки (предоплата, договор).',
+    '',
+    'Удобный формат — xlsx с колонками «Наименование», «Артикул», «Ед. изм.», «Цена с НДС».',
+    '',
+    'Спасибо!',
+  ].join('\n')
 }
 
 function StatusBadge({ supplier }: { supplier: Supplier }) {
@@ -87,6 +130,12 @@ function SampleButton({ supplier }: { supplier: Supplier }) {
           {(offers ?? []).map((o, i) => (
             <Text key={i} size="xs" lineClamp={2}>
               {formatMoney(o.price)} — {o.name}
+              {o.section && (
+                <Text span c="dimmed">
+                  {' '}
+                  · {o.section}
+                </Text>
+              )}
               {o.sku && (
                 <Text span c="dimmed">
                   {' '}
@@ -114,10 +163,52 @@ function SampleButton({ supplier }: { supplier: Supplier }) {
   )
 }
 
+function SectionsEditor({ supplier, suggestions, onSave }: { supplier: Supplier; suggestions: string[]; onSave: (sections: string[]) => Promise<void> }) {
+  const [opened, setOpened] = useState(false)
+  const [value, setValue] = useState<string[]>(supplier.sections)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => setValue(supplier.sections), [supplier.sections])
+
+  async function save() {
+    setSaving(true)
+    try {
+      await onSave(value)
+      setOpened(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Popover opened={opened} onChange={setOpened} width={420} shadow="md" withArrow transitionProps={{ duration: 0 }}>
+      <Popover.Target>
+        <Tooltip label="Разделы КП, которые закрывает поставщик">
+          <ActionIcon variant="subtle" onClick={() => setOpened((v) => !v)} aria-label="разделы">
+            <IconTags size={16} />
+          </ActionIcon>
+        </Tooltip>
+      </Popover.Target>
+      <Popover.Dropdown>
+        <Stack gap="xs">
+          <TagsInput label="Разделы" data={suggestions} value={value} onChange={setValue} placeholder="Мебель, Пищеблок…" />
+          <Group justify="flex-end">
+            <Button size="xs" loading={saving} onClick={save}>
+              Сохранить
+            </Button>
+          </Group>
+        </Stack>
+      </Popover.Dropdown>
+    </Popover>
+  )
+}
+
 export function SuppliersPanel() {
+  const objectSections = useWorkspace((s) => Array.from(new Set(s.documents.flatMap((d) => d.doc.summary).map((r) => r.section.trim()).filter(Boolean))))
   const [info, setInfo] = useState<SupplierIndexInfo | null>(null)
   const [name, setName] = useState('')
   const [site, setSite] = useState('')
+  const [sections, setSections] = useState<string[]>([])
   const [maxPages, setMaxPages] = useState<number | string>(3000)
   const [adding, setAdding] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
@@ -125,7 +216,12 @@ export function SuppliersPanel() {
   const [minShops, setMinShops] = useState<number | string>(3)
   const [settingsTouched, setSettingsTouched] = useState(false)
   const [savingSettings, setSavingSettings] = useState(false)
+  const [pendingUpload, setPendingUpload] = useState<{ supplier: Supplier; file: File } | null>(null)
+  const [uploadSection, setUploadSection] = useState('')
+  const [letter, setLetter] = useState<{ supplier: Supplier; text: string } | null>(null)
   const timer = useRef<number | null>(null)
+
+  const suggestions = useMemo(() => Array.from(new Set([...SECTIONS, ...objectSections, ...(info?.suppliers.flatMap((s) => s.sections) ?? [])])), [objectSections, info])
 
   const refresh = useCallback(async () => {
     try {
@@ -188,9 +284,10 @@ export function SuppliersPanel() {
     if (!name.trim()) return
     setAdding(true)
     try {
-      await addSupplier({ name: name.trim(), site: site.trim(), max_pages: typeof maxPages === 'number' ? maxPages : 3000 })
+      await addSupplier({ name: name.trim(), site: site.trim(), max_pages: typeof maxPages === 'number' ? maxPages : 3000, sections })
       setName('')
       setSite('')
+      setSections([])
       await refresh()
     } catch (e) {
       notifications.show({ color: 'red', title: 'Не удалось добавить поставщика', message: message(e) })
@@ -216,6 +313,29 @@ export function SuppliersPanel() {
     void run(supplier.id, () => removeSupplier(supplier.id), 'Не удалось удалить')
   }
 
+  async function confirmUpload() {
+    if (!pendingUpload) return
+    const { supplier, file } = pendingUpload
+    setPendingUpload(null)
+    await run(supplier.id, () => uploadSupplierPriceList(supplier.id, file, uploadSection), 'Не удалось загрузить прайс')
+    notifications.show({ color: 'green', message: uploadSection.trim() ? `Прайс раздела «${uploadSection.trim()}» загружен` : 'Прайс загружен' })
+  }
+
+  function openLetter(supplier: Supplier) {
+    const forSections = supplier.sections.length > 0 ? supplier.sections : objectSections.length > 0 ? objectSections : SECTIONS
+    setLetter({ supplier, text: requestLetter(forSections) })
+  }
+
+  async function copyLetter() {
+    if (!letter) return
+    try {
+      await navigator.clipboard.writeText(letter.text)
+      notifications.show({ color: 'green', message: 'Текст запроса скопирован' })
+    } catch {
+      notifications.show({ color: 'yellow', message: 'Не удалось скопировать автоматически — выделите текст и скопируйте вручную' })
+    }
+  }
+
   const suppliers = info?.suppliers ?? []
 
   return (
@@ -228,9 +348,11 @@ export function SuppliersPanel() {
         <Text size="xs" c="dimmed" mt="xs">
           Поставщики появляются здесь двумя путями. Автопоиск: при поиске цен во вкладке «Себестоимость» позиция, по которой в индексе
           меньше заданного числа магазинов, ищется в интернете{info?.search_engine ? ` (${info.search_engine}, без ключей и оплаты)` : ''},
-          найденные магазины и их цены попадают сюда сами, а их каталоги встают в очередь на обход. Вручную: сайт или прайс-лист xlsx (нужны колонки с наименованием и
-          ценой, шапку найдём сами). По сайту ядро ищет фид YML, потом карту сайта, потом идёт по ссылкам; цену берёт из разметки страниц.
-          Не чаще двух запросов в секунду, robots.txt уважается. Сайты без разметки цен обходом не берутся — для них прайс-лист.
+          найденные магазины и их цены попадают сюда сами, а их каталоги встают в очередь на обход. Вручную: сайт или прайс-лист xlsx (нужны
+          колонки с наименованием и ценой, шапку найдём сами); прайс можно грузить по разделам — каждый файл заменяет цены только своего
+          раздела. По сайту ядро ищет фид YML, потом карту сайта, потом идёт по ссылкам; цену берёт из разметки страниц. Не чаще двух
+          запросов в секунду, robots.txt уважается. Кнопка с конвертом даёт текст запроса поставщику: прайсы по разделам, срок действия цен и
+          плановое изменение — это нужно для индексации.
         </Text>
         <Group mt="sm" align="flex-end" wrap="wrap">
           <NumberInput
@@ -274,8 +396,9 @@ export function SuppliersPanel() {
           )}
         </Group>
         <Group mt="md" align="flex-end" wrap="wrap">
-          <TextInput label="Поставщик" placeholder="Например, Кворус" value={name} onChange={(e) => setName(e.currentTarget.value)} w={240} />
-          <TextInput label="Сайт (необязательно)" placeholder="https://example.ru" value={site} onChange={(e) => setSite(e.currentTarget.value)} w={280} />
+          <TextInput label="Поставщик" placeholder="Например, Кворус" value={name} onChange={(e) => setName(e.currentTarget.value)} w={220} />
+          <TextInput label="Сайт (необязательно)" placeholder="https://example.ru" value={site} onChange={(e) => setSite(e.currentTarget.value)} w={240} />
+          <TagsInput label="Разделы" placeholder="Мебель, Пищеблок…" data={suggestions} value={sections} onChange={setSections} w={300} />
           <NumberInput
             label="Страниц, не больше"
             value={maxPages}
@@ -283,7 +406,7 @@ export function SuppliersPanel() {
             min={50}
             max={50000}
             step={500}
-            w={160}
+            w={150}
             hideControls
           />
           <Button leftSection={<IconPlus size={16} />} loading={adding} disabled={!name.trim()} onClick={add}>
@@ -296,6 +419,7 @@ export function SuppliersPanel() {
         <Table.Thead>
           <Table.Tr>
             <Table.Th>Поставщик</Table.Th>
+            <Table.Th>Разделы</Table.Th>
             <Table.Th>Источник</Table.Th>
             <Table.Th ta="right">Позиций</Table.Th>
             <Table.Th>Обновлено</Table.Th>
@@ -331,6 +455,20 @@ export function SuppliersPanel() {
                 )}
               </Table.Td>
               <Table.Td>
+                <Group gap={4} wrap="wrap">
+                  {s.sections.map((section) => (
+                    <Badge key={section} size="xs" variant="outline">
+                      {section}
+                    </Badge>
+                  ))}
+                  {s.sections.length === 0 && (
+                    <Text size="xs" c="dimmed">
+                      —
+                    </Text>
+                  )}
+                </Group>
+              </Table.Td>
+              <Table.Td>
                 <Text size="xs" c="dimmed" lineClamp={2}>
                   {s.source || '—'}
                 </Text>
@@ -362,18 +500,31 @@ export function SuppliersPanel() {
                   )}
                   <FileButton
                     onChange={(file) => {
-                      if (file) void run(s.id, () => uploadSupplierPriceList(s.id, file), 'Не удалось загрузить прайс')
+                      if (file) {
+                        setUploadSection(s.sections[0] ?? '')
+                        setPendingUpload({ supplier: s, file })
+                      }
                     }}
                     accept=".xlsx,.xlsm"
                   >
                     {(props) => (
-                      <Tooltip label="Загрузить прайс-лист xlsx (заменит цены поставщика)">
+                      <Tooltip label="Загрузить прайс-лист xlsx (весь или по разделу)">
                         <ActionIcon {...props} variant="subtle" disabled={s.status === 'running' || busy === s.id} aria-label="загрузить прайс">
                           <IconFileSpreadsheet size={16} />
                         </ActionIcon>
                       </Tooltip>
                     )}
                   </FileButton>
+                  <SectionsEditor
+                    supplier={s}
+                    suggestions={suggestions}
+                    onSave={(next) => run(s.id, () => updateSupplier(s.id, { sections: next }), 'Не удалось сохранить разделы')}
+                  />
+                  <Tooltip label="Текст запроса поставщику: прайсы по разделам и индексация">
+                    <ActionIcon variant="subtle" onClick={() => openLetter(s)} aria-label="запрос поставщику">
+                      <IconMail size={16} />
+                    </ActionIcon>
+                  </Tooltip>
                   <SampleButton supplier={s} />
                   <Tooltip label="Удалить поставщика">
                     <ActionIcon variant="subtle" color="red" onClick={() => remove(s)} disabled={busy === s.id} aria-label="удалить">
@@ -386,7 +537,7 @@ export function SuppliersPanel() {
           ))}
           {suppliers.length === 0 && (
             <Table.Tr>
-              <Table.Td colSpan={6}>
+              <Table.Td colSpan={7}>
                 <Text size="sm" c="dimmed" ta="center" py="md">
                   Поставщиков пока нет. Добавьте сайт или загрузите прайс-лист.
                 </Text>
@@ -395,6 +546,40 @@ export function SuppliersPanel() {
           )}
         </Table.Tbody>
       </Table>
+
+      <Modal opened={pendingUpload !== null} onClose={() => setPendingUpload(null)} title="Прайс-лист поставщика" transitionProps={{ duration: 0 }}>
+        <Stack gap="sm">
+          <Text size="sm">
+            {pendingUpload?.supplier.name}: файл {pendingUpload?.file.name}
+          </Text>
+          <Autocomplete
+            label="Раздел прайса (необязательно)"
+            description="С разделом файл заменит цены только этого раздела; без раздела — все цены поставщика"
+            data={suggestions}
+            value={uploadSection}
+            onChange={setUploadSection}
+            placeholder="Мебель"
+          />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setPendingUpload(null)}>
+              Отмена
+            </Button>
+            <Button onClick={() => void confirmUpload()}>Загрузить</Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal opened={letter !== null} onClose={() => setLetter(null)} title={letter ? `Запрос поставщику «${letter.supplier.name}»` : ''} size="lg" transitionProps={{ duration: 0 }}>
+        <Stack gap="sm">
+          <Textarea value={letter?.text ?? ''} onChange={(e) => letter && setLetter({ ...letter, text: e.currentTarget.value })} autosize minRows={12} />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setLetter(null)}>
+              Закрыть
+            </Button>
+            <Button onClick={() => void copyLetter()}>Скопировать</Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Stack>
   )
 }

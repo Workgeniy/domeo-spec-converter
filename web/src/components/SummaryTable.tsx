@@ -24,6 +24,7 @@ interface FlatRow {
 export function SummaryTable() {
   const documents = useWorkspace((s) => s.documents)
   const kp = useWorkspace((s) => s.kp)
+  const indexation = useWorkspace((s) => s.indexation)
   const updateRow = useWorkspace((s) => s.updateRow)
   const updateRows = useWorkspace((s) => s.updateRows)
 
@@ -72,9 +73,9 @@ export function SummaryTable() {
 
   const totals = useMemo(() => {
     const active = rows.filter((r) => !r.row.excluded).map((r) => r.row)
-    const t = kpTotals(active, kp)
+    const t = kpTotals(active, kp, indexation)
     return { positions: active.length, excluded: rows.length - active.length, priced: t.priced, sum: t.total }
-  }, [rows, kp])
+  }, [rows, kp, indexation])
 
   const onToggle = useCallback((id: string) => {
     setSelected((prev) => {
@@ -187,6 +188,7 @@ export function SummaryTable() {
                 showDoc={showDoc}
                 sections={sections}
                 kp={kp}
+                indexation={indexation}
                 onToggle={onToggle}
                 onChange={updateRow}
               />

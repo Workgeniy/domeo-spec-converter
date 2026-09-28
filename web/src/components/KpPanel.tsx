@@ -38,11 +38,12 @@ export function KpPanel({ onDownload, downloading }: Props) {
   const kp = useWorkspace((s) => s.kp)
   const setKp = useWorkspace((s) => s.setKp)
   const documents = useWorkspace((s) => s.documents)
+  const indexation = useWorkspace((s) => s.indexation)
 
   const totals = useMemo(() => {
     const rows = documents.flatMap((d) => d.doc.summary.filter((r) => !r.excluded))
-    return kpTotals(rows, kp)
-  }, [documents, kp])
+    return kpTotals(rows, kp, indexation)
+  }, [documents, kp, indexation])
   const unpriced = totals.positions - totals.priced
 
   return (

@@ -42,6 +42,13 @@ public sealed class SuppliersController(IPricingEngine engine) : ControllerBase
         return NoContent();
     }
 
+    /// <summary>Название, разделы КП и глубина обхода поставщика.</summary>
+    [HttpPut("{id}")]
+    public async Task<ActionResult<ApiResponse<Supplier>>> Update(string id, [FromBody] SupplierUpdate body, [FromServices] UpdateSupplierHandler handler, CancellationToken ct)
+    {
+        return ApiResponse<Supplier>.Ok(await handler.HandleAsync(id, body, ct));
+    }
+
     /// <summary>Запустить обход сайта в фоне; прогресс виден в списке.</summary>
     [HttpPost("{id}/crawl")]
     public async Task<ActionResult<ApiResponse<Supplier>>> Crawl(string id, CancellationToken ct)
@@ -55,15 +62,15 @@ public sealed class SuppliersController(IPricingEngine engine) : ControllerBase
         return ApiResponse<Supplier>.Ok(await engine.StopCrawlAsync(id, ct));
     }
 
-    /// <summary>Прайс-лист xlsx поставщика — заменяет его позиции в индексе.</summary>
+    /// <summary>Прайс-лист xlsx поставщика: с полем «section» заменяет цены только этого раздела, без — все.</summary>
     [HttpPost("{id}/pricelist")]
     [RequestSizeLimit(100L * 1024 * 1024)]
-    public async Task<ActionResult<ApiResponse<Supplier>>> Upload(string id, IFormFile? file, [FromServices] UploadSupplierPriceListHandler handler, CancellationToken ct)
+    public async Task<ActionResult<ApiResponse<Supplier>>> Upload(string id, IFormFile? file, [FromForm] string? section, [FromServices] UploadSupplierPriceListHandler handler, CancellationToken ct)
     {
         if (file is null)
             throw new ValidationFailedException("Не передан файл (поле form-data «file»).");
         await using var stream = file.OpenReadStream();
-        return ApiResponse<Supplier>.Ok(await handler.HandleAsync(id, stream, file.FileName, file.Length, ct));
+        return ApiResponse<Supplier>.Ok(await handler.HandleAsync(id, stream, file.FileName, file.Length, section, ct));
     }
 
     [HttpGet("{id}/sample")]

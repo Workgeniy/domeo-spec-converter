@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import date
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -17,7 +18,8 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from ..models import ExportRequest, KpSettings, SourceDocument, SpecItem, SummaryItem
-from .kp import format_date, price_row
+from ..pricing.indexation import indexation_factor, rate_for, years_between
+from .kp import format_date, price_row, round_half_up
 
 FONT = "Times New Roman"
 THIN = Side(style="thin")
@@ -110,6 +112,10 @@ def build_workbook(data: ExportRequest) -> Workbook:
     # Сквозная нумерация по всему своду, как в образце (№ не начинается заново на листе «2»).
     numbered = list(enumerate(data.summary, start=1))
     if kind == "kp" and data.kp is not None:
+        delivery = _indexation_date(data)
+        if delivery is not None and data.indexation is not None and data.indexation.apply_to_kp:
+            # КП на будущую поставку: базовая цена каждой строки проиндексирована к дате по ставке раздела.
+            numbered = [(n, _indexed_item(s, data.indexation.rates, delivery)) for n, s in numbered]
         mounted = [(n, s) for n, s in numbered if s.installation]
         inventory = [(n, s) for n, s in numbered if not s.installation]
         _fill_appendix(wb.active, data, mounted, data.kp, APPENDIX_1)
@@ -160,15 +166,41 @@ PRICE_SOURCE_LABELS = {
 MATCH_KIND_LABELS = {"exact": "точно", "fuzzy": "похоже", "analog": "аналог", "none": "не найдено"}
 
 
+def _indexation_date(data: ExportRequest) -> date | None:
+    if data.indexation is None or not data.indexation.date:
+        return None
+    try:
+        return date.fromisoformat(data.indexation.date)
+    except ValueError:
+        return None
+
+
+def _indexed_item(item: SummaryItem, rates: dict[str, float], delivery: date) -> SummaryItem:
+    rate = rate_for(item.section, rates)
+    if item.price is None or rate is None:
+        return item
+    return item.model_copy(update={"price": round_half_up(item.price * indexation_factor(rate, date.today(), delivery), 2)})
+
+
 def _fill_cost_sheet(ws: Worksheet, data: ExportRequest, rows: list[tuple[int, SummaryItem]]) -> None:
-    """Файл себестоимости: три цены на позицию (интернет / мин / макс по истории) и выбор оператора."""
+    """Файл себестоимости: три цены на позицию (интернет / мин / макс по истории) и выбор оператора;
+    с датой поставки — ещё ставка индексации раздела и цена к дате (формулами, чтобы ставку
+    можно было поправить прямо в Excel)."""
     ws.title = "Себестоимость"
-    last_col = len(COST_COLUMNS)
+    delivery = _indexation_date(data)
+    years = years_between(date.today(), delivery) if delivery is not None else 0.0
+    columns = list(COST_COLUMNS)
+    if delivery is not None:
+        columns += [("Индексация, % в год", 12), (f"Цена на {delivery.isoformat()}", 14), (f"Стоимость на {delivery.isoformat()}", 15)]
+    last_col = len(columns)
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=last_col)
-    title = ws.cell(1, 1, f"Себестоимость: {data.title or data.doc_code}".strip(": "))
+    title_text = f"Себестоимость: {data.title or data.doc_code}".strip(": ")
+    if delivery is not None:
+        title_text += f" (цены проиндексированы к {delivery.isoformat()}, {years:.2f} г.)"
+    title = ws.cell(1, 1, title_text)
     title.font = Font(name=FONT, size=12, bold=True)
     ws.row_dimensions[1].height = 24
-    for idx, (label, width) in enumerate(COST_COLUMNS, start=1):
+    for idx, (label, width) in enumerate(columns, start=1):
         ws.column_dimensions[get_column_letter(idx)].width = width
         cell = ws.cell(2, idx, label)
         cell.font = Font(name=FONT, size=10, bold=True)
@@ -206,7 +238,13 @@ def _fill_cost_sheet(ws: Worksheet, data: ExportRequest, rows: list[tuple[int, S
             PRICE_SOURCE_LABELS.get(item.price_source, item.price_source),
             f"=F{r}*O{r}",
         ]
-        _write_values(ws, r, values, money=(6, 8, 10, 11, 12, 15, 17), percent=0, text=(2, 3, 4, 9, 14, 16))
+        money: tuple[int, ...] = (6, 8, 10, 11, 12, 15, 17)
+        if delivery is not None:
+            rate = rate_for(item.section, data.indexation.rates) if data.indexation is not None else None
+            can_index = rate is not None and item.price is not None
+            values += [rate, f"=ROUND(O{r}*(1+R{r}/100)^{years:.4f},2)" if can_index else None, f"=F{r}*S{r}" if can_index else None]
+            money += (19, 20)
+        _write_values(ws, r, values, money=money, percent=0, text=(2, 3, 4, 9, 14, 16))
         if h and h.kind == "analog":
             ws.cell(r, 14).font = Font(name=FONT, size=10, color="C00000")  # аналог — оператор должен проверить
         if item.internet_source.startswith("http"):
@@ -226,6 +264,14 @@ def _fill_cost_sheet(ws: Worksheet, data: ExportRequest, rows: list[tuple[int, S
     total.number_format = MONEY
     for col in (16, 17):
         ws.cell(r, col).border = BORDER
+    if delivery is not None:
+        label_dated = ws.cell(r, 19, f"Итого на {delivery.isoformat()}")
+        label_dated.font = Font(name=FONT, size=10, bold=True)
+        total_dated = ws.cell(r, 20, f"=SUM(T{first}:T{last})")
+        total_dated.font = Font(name=FONT, size=10, bold=True)
+        total_dated.number_format = MONEY
+        for col in (19, 20):
+            ws.cell(r, col).border = BORDER
     r += 2
     priced = sum(1 for _, s in rows if s.price is not None)
     ws.cell(r, 1, f"Позиций: {len(rows)}; с выбранной ценой: {priced}; без цены: {len(rows) - priced}.").font = Font(name=FONT, size=10)

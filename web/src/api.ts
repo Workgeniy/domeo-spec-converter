@@ -180,6 +180,8 @@ export interface ParsedDocument {
   kp?: KpSettings | null
   /** Только в запросе на выгрузку: working — рабочая, kp — приложения к договору, cost — себестоимость. */
   kind?: ExportKind
+  /** Только в запросе на выгрузку: индексация цен к дате поставки. */
+  indexation?: Indexation | null
 }
 
 export type ExportKind = 'working' | 'kp' | 'cost'
@@ -203,6 +205,8 @@ export interface MatchRequestItem {
   description: string
   /** Для поиска в интернете: цена нужна за эту единицу. */
   unit?: string
+  /** Раздел КП: прайсы того же раздела чуть надёжнее. */
+  section?: string
 }
 
 /** Состояние поиска цен в интернете: настроен ли, чем ищем (claude | suppliers | fake), сколько в кэше. */
@@ -237,6 +241,8 @@ export interface Supplier {
   query: string
   /** Каталог обходили целиком (а не только страницы из поиска). */
   crawled: boolean
+  /** Разделы КП, которые закрывает поставщик. */
+  sections: string[]
 }
 
 export interface SupplierOffer {
@@ -247,6 +253,53 @@ export interface SupplierOffer {
   url: string
   sku: string
   collected_at: string
+  /** Раздел прайса, если загружали прайс по разделу. */
+  section: string
+}
+
+export interface IndexationPair {
+  years: string
+  rate: number
+  samples: number
+}
+
+export interface IndexationGroup {
+  group: string
+  /** % в год по последним годам; null — данных мало. */
+  rate: number | null
+  samples: number
+  pairs: IndexationPair[]
+}
+
+/** Рост цен по истории закупок: по группам и в целом. */
+export interface HistoryIndexation {
+  overall: IndexationGroup | null
+  groups: IndexationGroup[]
+  computed_at: string
+}
+
+export type IndexationSource = 'history' | 'supplier' | 'official' | 'manual'
+
+/** Ставка индексации раздела, выбранная оператором; раздел «» — для разделов без своей ставки. */
+export interface IndexationRate {
+  section: string
+  rate: number
+  source: IndexationSource
+  note: string
+  updated_at: string
+}
+
+export interface IndexationInfo {
+  /** null — история закупок не загружена. */
+  history: HistoryIndexation | null
+  rates: IndexationRate[]
+}
+
+/** Индексация в выгрузке и в расчёте КП: дата поставки и ставки по разделам (ключ «» — по умолчанию). */
+export interface Indexation {
+  date: string
+  rates: Record<string, number>
+  apply_to_kp: boolean
 }
 
 export interface SupplierIndexInfo {
@@ -341,8 +394,25 @@ export function getSuppliers(): Promise<SupplierIndexInfo> {
   return fetch(SUPPLIERS).then((r) => readData<SupplierIndexInfo>(r))
 }
 
-export function addSupplier(body: { name: string; site: string; max_pages?: number }): Promise<Supplier> {
+export function addSupplier(body: { name: string; site: string; max_pages?: number; sections?: string[] }): Promise<Supplier> {
   return fetch(SUPPLIERS, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => readData<Supplier>(r))
+}
+
+export function updateSupplier(id: string, body: { name?: string; sections?: string[]; max_pages?: number }): Promise<Supplier> {
+  return fetch(`${SUPPLIERS}/${encodeURIComponent(id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) =>
+    readData<Supplier>(r),
+  )
+}
+
+export function getIndexation(): Promise<IndexationInfo> {
+  return fetch('/api/specifications/indexation').then((r) => readData<IndexationInfo>(r))
+}
+
+/** Справочник ставок заменяется целиком. */
+export function setIndexationRates(rates: Omit<IndexationRate, 'updated_at'>[]): Promise<IndexationInfo> {
+  return fetch('/api/specifications/indexation', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rates }) }).then((r) =>
+    readData<IndexationInfo>(r),
+  )
 }
 
 export async function removeSupplier(id: string): Promise<void> {
@@ -358,9 +428,10 @@ export function stopSupplier(id: string): Promise<Supplier> {
   return fetch(`${SUPPLIERS}/${encodeURIComponent(id)}/stop`, { method: 'POST' }).then((r) => readData<Supplier>(r))
 }
 
-export function uploadSupplierPriceList(id: string, file: File): Promise<Supplier> {
+export function uploadSupplierPriceList(id: string, file: File, section = ''): Promise<Supplier> {
   const form = new FormData()
   form.append('file', file)
+  if (section.trim()) form.append('section', section.trim())
   return fetch(`${SUPPLIERS}/${encodeURIComponent(id)}/pricelist`, { method: 'POST', body: form }).then((r) => readData<Supplier>(r))
 }
 

@@ -18,6 +18,7 @@ import { useWorkspace, type HistoryChoice, type RowKey, type SummaryRow } from '
 import { useUi } from '../ui'
 import { CostRowView } from './CostRow'
 import { formatMoney } from './format'
+import { IndexationPanel } from './IndexationPanel'
 import { TableScroller } from './TableScroller'
 
 interface Props {
@@ -169,7 +170,7 @@ export function CostPanel({ onDownload, downloading }: Props) {
         }
         const batch = targets.slice(i, i + batchSize)
         const lookups = await lookupInternet(
-          batch.map((r) => ({ id: r.id, name: r.row.name, description: r.row.description, unit: r.row.unit })),
+          batch.map((r) => ({ id: r.id, name: r.row.name, description: r.row.description, unit: r.row.unit, section: r.row.section })),
           scope === 'all',
         )
         applyInternet(lookups)
@@ -375,6 +376,8 @@ export function CostPanel({ onDownload, downloading }: Props) {
           найденные предложения со ссылками; щелчок по предложению делает его ценой из интернета для позиции.
         </Text>
       </Paper>
+
+      <IndexationPanel />
 
       {stats.kinds.analog > 0 && (
         <Alert color="orange" variant="light">
