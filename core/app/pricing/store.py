@@ -52,6 +52,11 @@ class PriceListStore:
             return {}
         return {item.id: self.matcher.match(item.name, item.description) for item in items}
 
+    def market_names(self, name: str, description: str = "") -> list[str]:
+        """Как позицию называли поставщики по истории закупок — для поиска цен на рынке."""
+        matcher = self.matcher
+        return matcher.market_names(name, description) if matcher is not None else []
+
     def _set(self, price_list: PriceList) -> None:
         self.price_list = price_list
         self.matcher = Matcher(price_list)

@@ -35,6 +35,8 @@ public sealed record HistoryCandidate
     public string Group { get; init; } = "";
     /// <summary>1.0 — точное совпадение наименования.</summary>
     public double Score { get; init; }
+    /// <summary>Совпало не с нашим наименованием, а с названием у поставщика из истории закупок.</summary>
+    public string Alias { get; init; } = "";
     public double? PriceMin { get; init; }
     public double? PriceMax { get; init; }
     public double? PriceMedian { get; init; }

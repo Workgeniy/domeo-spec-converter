@@ -6,15 +6,16 @@ from pathlib import Path
 import pytest
 
 from app.pricing.history import normalize_name, read_history, tokens
-from app.pricing.matching import Matcher
-from app.pricing.pricelist import PriceList, build_from_file
+from app.pricing.matching import Matcher, clean_partner_name
+from app.pricing.pricelist import PriceEntry, PriceList, Purchase, build_from_file
 
 from .conftest import sample  # noqa: F401 — history_xlsx приходит из conftest
 
 def test_normalize_and_tokens() -> None:
     assert normalize_name(" Стул  детский, регулируемый (гр. 1–3) ") == "стул детский регулируемый гр 1 3"
     assert normalize_name("Ёлка") == normalize_name("елка")
-    assert tokens("Стол для воспитателя, ЛДСП") == {"стол", "воспитателя", "лдсп"}
+    # Короткие и служебные слова не в счёт, остальные — основами (подробнее — test_synonyms.py).
+    assert tokens("Стол для воспитателя, ЛДСП") == tokens("стол воспитатель лдсп") and len(tokens("Стол для воспитателя, ЛДСП")) == 3
 
 
 def test_read_history_parses_rows(history_xlsx: Path) -> None:
@@ -63,6 +64,56 @@ def test_matcher_levels(history_xlsx: Path) -> None:
     assert analog.kind in ("fuzzy", "analog") and analog.best is not None and "холодильный" in analog.best.name.lower()
     nothing = matcher.match("Проектор мультимедийный")
     assert nothing.kind == "none" and nothing.best is None
+
+
+def test_matcher_uses_supplier_names(history_xlsx: Path) -> None:
+    matcher = Matcher(build_from_file(history_xlsx))
+    # В проекте написали модель, у нас позиция называется иначе — находится по номенклатуре поставщика.
+    by_alias = matcher.match("Polair CM107-S")
+    assert by_alias.kind == "fuzzy" and by_alias.best is not None
+    assert by_alias.best.name == "Шкаф холодильный среднетемпературный" and by_alias.best.alias == "Polair CM107-S"
+    assert matcher.match("Шкаф холодильный среднетемпературный").best.alias == ""  # по нашему — без пометки
+    # Названия для поиска на рынке: «Стул детский» общее нашего — не берём, «Стул «Малыш»» — берём.
+    assert matcher.market_names("Шкаф холодильный среднетемпературный") == ["Polair CM107-S"]
+    assert matcher.market_names("Стул детский регулируемый") == ["Стул «Малыш» гр.1-3"]
+    assert matcher.market_names("Проектор мультимедийный") == []
+
+
+def _price_list(*entries: tuple[str, list[str]]) -> PriceList:
+    return PriceList(
+        entries=[
+            PriceEntry(
+                key=normalize_name(name),
+                name=name,
+                purchases=[Purchase(purchased_at=date(2025, 1, 1), unit_price=1000.0, qty=1, partner_item=p) for p in partners or [""]],
+                price_min=1000.0,
+                price_max=1000.0,
+            )
+            for name, partners in entries
+        ]
+    )
+
+
+def test_matcher_head_word_and_generic_names() -> None:
+    matcher = Matcher(_price_list(("Обеденный стол с 4 стульями", []), ("Стул обеденный", [])))
+    # Слова те же, а главное слово другое: стол со стульями — не стул.
+    chair = matcher.match("Стул для обеденного стола")
+    assert chair.kind == "fuzzy" and chair.best.name == "Стул обеденный"
+    assert chair.candidates[1].name == "Обеденный стол с 4 стульями" and chair.candidates[1].score < 0.6
+    # Однословное название у поставщика не поднимает до «похоже».
+    safes = Matcher(_price_list(("Сейф офисный", ["Сейф T-40.EL"])))
+    assert safes.match("Сейф-термостат").kind == "analog"
+    # Номенклатура поставщика без единого общего слова — скорее деталь, для поиска на рынке не годится.
+    parts = Matcher(_price_list(("Секция подвесная для детской одежды", ["Контейнер полочный 12.332.65.С50/1 (SK 3209)", "Секция подвесная СП-1"])))
+    assert parts.market_names("Секция подвесная для детской одежды") == ["Секция подвесная СП-1"]
+
+
+def test_clean_partner_name() -> None:
+    assert clean_partner_name("Настенный лабиринт с деревянным шариком(Астра)") == "Настенный лабиринт с деревянным шариком"
+    assert clean_partner_name('Шапочка мед. одноразовая "Шарлотта"(Холанд') == 'Шапочка мед. одноразовая "Шарлотта"'
+    assert clean_partner_name("Прибор демонстрационный*") == "Прибор демонстрационный"
+    assert clean_partner_name("Ведро 9 л, упак. 10 шт.(2)") == "Ведро 9 л, упак. 10 шт"
+    assert clean_partner_name("Стол письменный (1400х600)") == "Стол письменный (1400х600)"  # размер в скобках — часть названия
 
 
 # ---------- реальная выгрузка (пропускается, если образца нет) ----------

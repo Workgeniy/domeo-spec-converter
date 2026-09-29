@@ -59,6 +59,11 @@ function MatchCell({ history }: { history: HistoryPrice | null }) {
               {best.name}
             </Text>
           )}
+          {best?.alias && (
+            <Text size="xs" c="dimmed" lineClamp={1}>
+              по названию у поставщика: {best.alias}
+            </Text>
+          )}
         </div>
       </HoverCard.Target>
       <HoverCard.Dropdown>
@@ -73,6 +78,12 @@ function MatchCell({ history }: { history: HistoryPrice | null }) {
                 <Text span c="dimmed">
                   {' '}
                   · {c.group}
+                </Text>
+              )}
+              {c.alias && (
+                <Text span c="dimmed">
+                  {' '}
+                  · по названию у поставщика «{c.alias}»
                 </Text>
               )}
             </Text>

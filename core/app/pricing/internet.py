@@ -16,7 +16,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 from zoneinfo import ZoneInfo
 
 from ..models import InternetLookup, InternetOffer, InternetSearchInfo, MatchRequestItem
@@ -234,21 +234,36 @@ class FakePriceProvider:
         )
 
 
+MarketNames = Callable[[str, str], list[str]]  # (наименование, характеристики) → названия у поставщиков по истории
+
+
+def _market_names(source: MarketNames | None, name: str, description: str) -> list[str]:
+    """Названия позиции у поставщиков из истории закупок; сбой сопоставления поиск не ломает."""
+    if source is None:
+        return []
+    try:
+        return list(source(name, description))
+    except Exception:  # noqa: BLE001
+        return []
+
+
 class SupplierIndexProvider:
     """Поиск по индексу каталогов поставщиков — без модели и без внешних запросов."""
 
     name = "suppliers"
     cacheable = False  # индекс локальный и мгновенный, а кэш пережил бы обновление каталога
 
-    def __init__(self, index):  # SupplierIndex; без аннотации, чтобы не тянуть импорт по кругу
+    def __init__(self, index, market_names: MarketNames | None = None):  # SupplierIndex; без аннотации, чтобы не тянуть импорт по кругу
         self.index = index
+        self.market_names = market_names
 
     @property
     def model(self) -> str:
         return self.index.description
 
     def lookup(self, name: str, description: str, unit: str, today: str, section: str = "") -> InternetLookup:
-        return self.index.lookup(name, description, unit, today, section)
+        aliases = _market_names(self.market_names, name, description)
+        return self.index.lookup(name, description, unit, today, section, aliases)
 
 
 class AutoSearchProvider:
@@ -256,14 +271,19 @@ class AutoSearchProvider:
     разных магазинов с той же позицией, она ищется в интернете, найденные магазины и цены
     пополняют индекс, и ответ берётся уже из него — так у оператора картина рынка, а не
     одна цена. Бесплатно: поисковик без ключа, страницы читаются по разметке; повторный
-    запрос той же позиции в течение недели идёт из кэша поиска."""
+    запрос той же позиции в течение недели идёт из кэша поиска.
+
+    Позиция ищется и под названиями, под которыми её покупали раньше (номенклатура
+    поставщика в истории закупок, ``market_names``): в индексе — всегда, в интернете — если по
+    нашему названию магазинов не хватило. У поставщика это обычно конкретная модель."""
 
     name = "auto"
     cacheable = False  # кэш есть у самого веб-поиска (по запросу), индекс — локальный
 
-    def __init__(self, index, web=None):  # SupplierIndex, WebPriceSearch | None
+    def __init__(self, index, web=None, market_names: MarketNames | None = None):  # SupplierIndex, WebPriceSearch | None
         self.index = index
         self.web = web
+        self.market_names = market_names
 
     @property
     def model(self) -> str:
@@ -271,7 +291,8 @@ class AutoSearchProvider:
         return f"{self.index.description}; {engine}"
 
     def lookup(self, name: str, description: str, unit: str, today: str, section: str = "") -> InternetLookup:
-        ranked = self.index.rank(name, description, section)
+        aliases = _market_names(self.market_names, name, description)
+        ranked = self.index.rank(name, description, section, aliases)
         base = self.index.build_lookup(ranked, name, description, today)
         base.provider = self.name
         shops_before = self.index.matched_shops(ranked)
@@ -282,7 +303,13 @@ class AutoSearchProvider:
         except Exception as exc:  # noqa: BLE001 — сбой поисковика не должен ронять пачку
             base.comment = f"{base.comment}; автопоиск не ответил: {str(exc)[:120]}".strip("; ")
             return base
-        ranked = self.index.rank(name, description, section)
+        ranked = self.index.rank(name, description, section, aliases)
+        if aliases and self.index.matched_shops(ranked) < self.index.min_shops:
+            try:
+                self.web.find(aliases[0], "", unit, today)  # то, что покупали раньше, — своими словами поставщика
+                ranked = self.index.rank(name, description, section, aliases)
+            except Exception:  # noqa: BLE001 — второй запрос необязательный: хватит того, что уже нашлось
+                pass
         result = self.index.build_lookup(ranked, name, description, today)
         result.provider = self.name
         if self.index.matched_shops(ranked) <= shops_before:
@@ -313,16 +340,16 @@ class InternetPriceService:
         self._save_lock = threading.Lock()
 
     @classmethod
-    def from_env(cls, supplier_index=None, web_search=None) -> InternetPriceService:
+    def from_env(cls, supplier_index=None, web_search=None, market_names: MarketNames | None = None) -> InternetPriceService:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
         choice = os.environ.get("PRICE_SEARCH_PROVIDER", "").strip().lower()
         provider: PriceSearchProvider | None = None
         if choice == "fake":
             provider = FakePriceProvider()
         elif choice == "suppliers" and supplier_index is not None:
-            provider = SupplierIndexProvider(supplier_index)
+            provider = SupplierIndexProvider(supplier_index, market_names)
         elif choice == "auto" and supplier_index is not None:
-            provider = AutoSearchProvider(supplier_index, web_search)
+            provider = AutoSearchProvider(supplier_index, web_search, market_names)
         elif choice in ("", "claude") and api_key:
             provider = ClaudeWebSearchProvider(
                 api_key=api_key,
@@ -331,7 +358,7 @@ class InternetPriceService:
                 max_searches=int(os.environ.get("PRICE_SEARCH_MAX_SEARCHES", DEFAULT_MAX_SEARCHES)),
             )
         elif choice == "" and supplier_index is not None:
-            provider = AutoSearchProvider(supplier_index, web_search)
+            provider = AutoSearchProvider(supplier_index, web_search, market_names)
         return cls(
             provider,
             ttl_days=int(os.environ.get("INTERNET_PRICE_TTL_DAYS", DEFAULT_TTL_DAYS)),

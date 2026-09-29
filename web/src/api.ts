@@ -34,6 +34,8 @@ export interface HistoryCandidate {
   group: string
   /** 1.0 — точное совпадение наименования. */
   score: number
+  /** Совпало не с нашим наименованием, а с названием у поставщика из истории закупок. */
+  alias: string
   price_min: number | null
   price_max: number | null
   price_median: number | null

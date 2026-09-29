@@ -55,7 +55,7 @@ supplier_index = SupplierIndex()
 search_engine = engine_from_env()
 web_search = WebPriceSearch(search_engine, supplier_index) if search_engine is not None else None
 supplier_index.search_engine = search_engine.name if search_engine is not None else ""
-internet_prices = InternetPriceService.from_env(supplier_index, web_search)
+internet_prices = InternetPriceService.from_env(supplier_index, web_search, price_lists.market_names)
 
 
 @asynccontextmanager

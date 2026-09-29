@@ -170,6 +170,50 @@ def test_auto_provider_searches_web_until_enough_shops(tmp_path: Path) -> None:
     assert "не ответил" in broken.lookup("Ножничный подъёмник", "", "шт.", "2026-09-25").comment
 
 
+BOILER = """<html><head><title>Кипятильник Atesy Фонтан АКНЭ-100 — ПроКухня</title>
+<script type="application/ld+json">{"@type":"Product","name":"Кипятильник Atesy Фонтан АКНЭ-100","offers":{"@type":"Offer","price":"63 489","priceCurrency":"RUB"}}</script>
+</head><body></body></html>"""
+
+
+class ModelOnlyEngine:
+    """По общему названию ничего нет, по модели из истории закупок — страница магазина."""
+
+    name = "fake-search"
+
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def search(self, query: str, max_results: int = 8) -> list[SearchHit]:
+        self.queries.append(query)
+        if "АКНЭ-100" in query:
+            return [SearchHit(url="https://prokuhnya.test/aknje-100", title="Кипятильник АКНЭ-100")]
+        return []
+
+
+def test_auto_provider_searches_names_from_history(tmp_path: Path) -> None:
+    index = SupplierIndex(data_dir=tmp_path)
+    index.set_settings(autocrawl_pages=0, min_shops=1)
+    pages = {"https://prokuhnya.test/aknje-100": BOILER, "https://prokuhnya.test/robots.txt": ""}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = pages.get(str(request.url))
+        return httpx.Response(200, headers={"content-type": "text/html"}, content=body.encode("utf-8")) if body is not None else httpx.Response(404)
+
+    engine = ModelOnlyEngine()
+    web = WebPriceSearch(engine, index, data_dir=tmp_path, client=httpx.Client(transport=httpx.MockTransport(handler)), page_delay=0)
+    provider = AutoSearchProvider(index, web, market_names=lambda name, description: ["Кипятильник Фонтан АКНЭ-100"])
+    lookup = provider.lookup("Кипятильник электрический", "", "шт.", "2026-09-29")
+    # Сначала — по нашему названию; магазинов не хватило — по названию, под которым покупали раньше.
+    assert engine.queries == ["Кипятильник электрический купить", "Кипятильник Фонтан АКНЭ-100 купить"]
+    assert lookup.price == 63489 and "по названию из истории закупок" in lookup.offers[0].note
+    # Магазин уже в индексе: повторный поиск в интернет не ходит.
+    again = provider.lookup("Кипятильник электрический", "", "шт.", "2026-09-29")
+    assert again.price == 63489 and len(engine.queries) == 2
+    # Сбой сопоставления с историей поиск не ломает.
+    broken = AutoSearchProvider(index, web, market_names=lambda name, description: 1 / 0)
+    assert broken.lookup("Кипятильник электрический", "", "шт.", "2026-09-29").price is None
+
+
 class FakeCrawler:
     def __init__(self, **kwargs):
         pass

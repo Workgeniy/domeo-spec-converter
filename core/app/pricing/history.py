@@ -12,8 +12,11 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from typing import NamedTuple
 
 import openpyxl
+
+from .synonyms import ADJECTIVE_END, RUSSIAN_WORD, canonical_stems, plain_stems, stem
 
 # Как называются графы в выгрузке 1С → как называем их мы. Ищем по началу имени, чтобы
 # пережить мелкие отличия выгрузок.
@@ -66,9 +69,55 @@ def normalize_name(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def significant_words(text: str) -> list[str]:
+    """Значимые слова наименования как есть: без коротких и служебных."""
+    return [t for t in normalize_name(text).split() if len(t) >= 3 and t not in STOPWORDS]
+
+
+def stems(text: str) -> list[str]:
+    """Значимые слова наименования по порядку — основами и через словарь (synonyms.py):
+    «перфорированный» и «перфорированными», «ванна моечная» и «мойка» дают одно и то же."""
+    return canonical_stems(significant_words(text))
+
+
 def tokens(text: str) -> set[str]:
-    """Значимые слова наименования — для индекса нестрогого поиска."""
-    return {t for t in normalize_name(text).split() if len(t) >= 3 and t not in STOPWORDS}
+    """Те же основы набором — для индекса нестрогого поиска."""
+    return set(stems(text))
+
+
+def loose_tokens(text: str) -> set[str]:
+    """Основы и до, и после замены оборотов — для проверки «есть ли вообще общие слова»."""
+    return analyze_name(text).loose
+
+
+class NameWords(NamedTuple):
+    """Разбор наименования для сопоставления — всё за один проход."""
+
+    key: str  # normalize_name
+    stems: list[str]  # значимые слова основами, по порядку (см. stems)
+    loose: set[str]  # основы и до, и после замены оборотов
+    head: str  # главное слово — основа
+    head_word: str  # главное слово как написано — чтобы видеть число
+
+
+def analyze_name(text: str) -> NameWords:
+    """Главное слово — первое, которое не прилагательное: у «Шкаф холодильный» и «Холодильный
+    шкаф» это шкаф, у «Обеденный стол с 4 стульями» — стол. Если первым идёт не русское слово
+    (марка, модель), главное слово не определяем. Как написано — чтобы видеть число: «Стулья
+    с пюпитром» у магазина — раздел каталога, «Стул с пюпитром» в проекте — товар."""
+    key = normalize_name(text)
+    words = [t for t in key.split() if len(t) >= 3 and t not in STOPWORDS]
+    canonical = canonical_stems(words)
+    adjectives = {stem(w) for w in words if ADJECTIVE_END.search(w)}
+    head = next((s for s in canonical if s not in adjectives), "")
+    first_noun = next((w for w in words if not ADJECTIVE_END.search(w)), "")
+    return NameWords(
+        key=key,
+        stems=canonical,
+        loose=set(canonical) | plain_stems(words),
+        head=head if RUSSIAN_WORD.fullmatch(head) else "",
+        head_word=first_noun if RUSSIAN_WORD.fullmatch(first_noun) else "",
+    )
 
 
 def read_history(path: str | Path) -> list[PurchaseRow]:

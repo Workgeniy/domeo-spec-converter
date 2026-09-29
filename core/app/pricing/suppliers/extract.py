@@ -21,6 +21,12 @@ PRICE_RE = re.compile(r"(\d[\d\s  ]*(?:[.,]\d{1,2})?)")
 RUB_HINT = re.compile(r"₽|руб|р\.|rub", re.I)
 ACCEPTED_CURRENCIES = {None, "", "RUB", "RUR", "₽", "руб", "руб."}
 MIN_PRICE, MAX_PRICE = 1.0, 100_000_000.0
+# Заголовки страниц разделов и SEO-заголовки вместо названия товара: «Диваны в Хабаровске»,
+# «Стеллажи … купить от производителя», «Главная». Цена у них «от» или случайная.
+LISTING_WORDS = re.compile(
+    r"(?<!\w)(?:купить|оптом|недорого|распродажа|главная|новинки|каталог|интернет-магазин\w*|в наличии|по лучшей цене|от производителя)(?!\w)", re.I
+)
+LISTING_CITY = re.compile(r"\s(?:в|по)\s+(?:г\.\s*)?[А-ЯЁ][а-яё]+(?:[\s-][А-ЯЁ][а-яё]+)?(?:\s+и\s+(?:области|МО))?\s*$")
 
 
 @dataclass
@@ -63,6 +69,25 @@ def _text(value: Any) -> str:
     if isinstance(value, list):
         return _text(value[0]) if value else ""
     return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def looks_like_listing(name: str) -> bool:
+    """Название — заголовок раздела или SEO-заголовок, а не товар."""
+    return bool(LISTING_WORDS.search(name) or LISTING_CITY.search(name))
+
+
+def product_name(name: str) -> str:
+    """Название товара без хвоста заголовка страницы: «Наушники - Учебные материалы |
+    Учебное оборудование для школ…» → «Наушники». Короткий хвост «- Раздел» перед «|» —
+    тоже часть заголовка; длинный («Перегородка - стеллаж на каркасе») — часть названия."""
+    if " | " not in name:
+        return name
+    head = name.split(" | ", 1)[0].strip()
+    if " - " in head:
+        before, tail = head.rsplit(" - ", 1)
+        if len(tail.split()) <= 3:
+            head = before.strip()
+    return head or name
 
 
 def _currency_ok(value: Any) -> bool:
@@ -240,7 +265,9 @@ def extract_offers(html: str, page_url: str) -> list[Extracted]:
     for extractor in (_from_jsonld, _from_microdata, _from_opengraph, _from_heuristic):
         offers = _dedupe(extractor(soup, page_url))
         if offers:
-            return _absolute(offers, page_url)
+            for offer in offers:
+                offer.name = product_name(offer.name)
+            return _absolute([offer for offer in offers if not looks_like_listing(offer.name)], page_url)
     return []
 
 

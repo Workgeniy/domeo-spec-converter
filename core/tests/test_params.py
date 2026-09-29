@@ -23,13 +23,29 @@ def test_scalar_params() -> None:
 
 def test_compare_matches_conflicts_and_unknown() -> None:
     spec = extract_params("Стеллаж с перфорированными полками, 2000х1000х400(h)")
-    assert compare_params(spec, extract_params("Стеллаж 2000x1000x400 с 4 перфорированными полками")) == (1, 0)
-    assert compare_params(spec, extract_params("Стеллаж 400x1000x2000")) == (1, 0)  # другой порядок осей
-    assert compare_params(spec, extract_params("Стеллаж 2010x1000x400")) == (1, 0)  # в допуске
-    assert compare_params(spec, extract_params("Стеллаж 2500x1000x400 с 4 полками")) == (0, 1)
-    assert compare_params(spec, extract_params("Стеллаж 2000x1000")) == (1, 0)  # две оси из трёх
-    assert compare_params(spec, extract_params("Стеллаж перфорированный")) == (0, 0)  # размер не указан
-    assert compare_params(Params(), extract_params("Стеллаж 2500x1000x400")) == (0, 0)  # у позиции нет параметров
+    assert compare_params(spec, extract_params("Стеллаж 2000x1000x400 с 4 перфорированными полками")) == (1, 0, 0)
+    assert compare_params(spec, extract_params("Стеллаж 400x1000x2000")) == (1, 0, 0)  # другой порядок осей
+    assert compare_params(spec, extract_params("Стеллаж 2010x1000x400")) == (1, 0, 0)  # в допуске
+    assert compare_params(spec, extract_params("Стеллаж 2500x1000x400 с 4 полками")) == (0, 1, 0)
+    assert compare_params(spec, extract_params("Стеллаж 2000x1000")) == (1, 0, 0)  # две оси из трёх
+    assert compare_params(spec, extract_params("Стеллаж перфорированный")) == (0, 0, 1)  # размер не указан
+    assert compare_params(Params(), extract_params("Стеллаж 2500x1000x400")) == (0, 0, 0)  # у позиции нет параметров
     fridge = extract_params("Шкаф холодильный среднетемпературный 700л")
-    assert compare_params(fridge, extract_params("Шкаф холодильный Polair CM107-S, 700 л")) == (1, 0)
-    assert compare_params(fridge, extract_params("Шкаф холодильный Polair CM105-S, 500 л")) == (0, 1)
+    assert compare_params(fridge, extract_params("Шкаф холодильный Polair CM107-S, 700 л")) == (1, 0, 0)
+    assert compare_params(fridge, extract_params("Шкаф холодильный Polair CM105-S, 500 л")) == (0, 1, 0)
+
+
+def test_counts_sections_burners_shelves() -> None:
+    assert extract_params("Ванна котломоечная двухсекционная").counts == {"секций": {2}}
+    assert extract_params("Плита электрическая 4-х конфорочная").counts == {"конфорок": {4}}
+    assert extract_params("Шкаф двухстворчатый, с двумя дверями").counts == {"створок": {2}, "дверей": {2}}
+    assert extract_params("Стеллаж 5-ти ярусный, 4 полки").counts == {"ярусов": {5}, "полок": {4}}
+    assert extract_params("Кровать двухъярусная; модуль для сна на 25 мест").counts == {"ярусов": {2}, "мест": {25}}
+    assert extract_params("Полотенце махровое").counts == {}
+    two = extract_params("Ванна котломоечная двухсекционная")
+    assert compare_params(two, extract_params("Ванна котломоечная односекционная ВК 1-э")) == (0, 1, 0)
+    assert compare_params(two, extract_params("Ванна котломоечная 2-х секционная")) == (1, 0, 0)
+    assert compare_params(two, extract_params("Ванна котломоечная ВК-2")) == (0, 0, 1)  # число секций не указано
+    # Счётные признаки — в комментарий оператору, но не в запрос поисковику (в названии они уже есть).
+    shelves = extract_params("Стеллаж 2000x1000x400, 4 полки")
+    assert shelves.describe() == "2000x1000x400" and shelves.describe(counts=True) == "2000x1000x400 полок 4"

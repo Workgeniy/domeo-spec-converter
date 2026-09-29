@@ -13,7 +13,7 @@ from openpyxl import Workbook
 from app.main import app, internet_prices, supplier_index
 from app.pricing.internet import SupplierIndexProvider
 from app.pricing.suppliers.crawler import CrawlResult, SiteCrawler, normalize_site
-from app.pricing.suppliers.extract import Extracted, extract_offers, parse_price, parse_sitemap, parse_yml
+from app.pricing.suppliers.extract import Extracted, extract_offers, looks_like_listing, parse_price, parse_sitemap, parse_yml, product_name
 from app.pricing.suppliers.index import SupplierIndex
 from app.pricing.suppliers.xlsx_import import read_price_list
 
@@ -221,8 +221,9 @@ def test_parameters_separate_sizes(tmp_path: Path) -> None:
     assert not by_title["Стеллаж 2000x1000x400 с 4 перфорированными полками"].analog and "параметры совпали" in by_title["Стеллаж 2000x1000x400 с 4 перфорированными полками"].note
     assert by_title["Стеллаж 2500x1000x400 с 4 перфорированными полками"].analog and "параметры не совпали" in by_title["Стеллаж 2500x1000x400 с 4 перфорированными полками"].note
     assert by_title["Стеллаж 2000x1000x500 с 4 перфорированными полками"].analog
-    assert not by_title["Стеллаж с перфорированными полками, 4 полки"].analog and "параметры не указаны" in by_title["Стеллаж с перфорированными полками, 4 полки"].note
-    assert sized.price == (9000 + 10180) / 2 and sized.comment.startswith("параметры 2000x1000x400;")
+    # Число полок совпало, размера у продавца нет — в цене, но с пометкой «совпали не все».
+    assert not by_title["Стеллаж с перфорированными полками, 4 полки"].analog and "совпали не все" in by_title["Стеллаж с перфорированными полками, 4 полки"].note
+    assert sized.price == (9000 + 10180) / 2 and sized.comment.startswith("параметры 2000x1000x400 полок 4;")
     assert sized.offers[0].title.startswith("Стеллаж 2000x1000x400")  # совпавший размер — первым
     # Только чужие размеры: цены нет, оператору честно сказано почему.
     other = index.lookup("Стеллаж 2500x1000x400", "2500х1000х400(h)", "шт.", "2026-09-25")
@@ -231,6 +232,50 @@ def test_parameters_separate_sizes(tmp_path: Path) -> None:
     unknown = index.lookup("Стеллаж с перфорированными полками", "3000х1200х600(h)", "шт.", "2026-09-25")
     assert unknown.status == "found" and unknown.price == 9000 and "параметры не указаны" in unknown.offers[0].note
     assert "проверьте размер" in unknown.comment and [o.analog for o in unknown.offers[1:]] == [True, True, True]
+
+
+def test_listing_titles_and_page_tails() -> None:
+    assert looks_like_listing("Диваны в Хабаровске") and looks_like_listing("Скамьи для раздевалок купить от производителя")
+    assert looks_like_listing("Главная") and not looks_like_listing("Мыло жидкое в флаконе") and not looks_like_listing("Шкаф для каталогов")
+    assert product_name("Наушники - Учебные материалы | Учебное оборудование для школ") == "Наушники"
+    assert product_name("Перегородка - стеллаж на металлическом каркасе | Сайт") == "Перегородка - стеллаж на металлическом каркасе"
+    assert product_name("Стул ИЗО, ткань") == "Стул ИЗО, ткань"
+
+
+def test_same_item_rules(tmp_path: Path) -> None:
+    index = SupplierIndex(data_dir=tmp_path)
+    shop = index.add("Магазин", "shop.test")
+    index.set_offers(
+        shop.id,
+        [
+            Extracted(name="Стулья с пюпитром", price=9900),  # раздел каталога: множественное число
+            Extracted(name="Стул с пюпитром ИЗО, ткань черная", price=5200),
+            Extracted(name="Столы", price=3500),  # раздел: одно слово
+            Extracted(name="Перегородка - стеллаж на металлическом каркасе", price=219000),  # другое главное слово
+            Extracted(name="Стеллаж металлический МС-1", price=6100),
+            Extracted(name="Стулья на металлическом каркасе в Челябинске", price=3600),  # SEO-заголовок
+            Extracted(name="Наушники - Учебные материалы | Учебное оборудование для школ", price=1200),  # хвост заголовка
+            Extracted(name="Посудомоечная машина фронтальная", price=1),  # «1 ₽» — цена по запросу
+            Extracted(name="Ванна котломоечная односекционная ВК-1", price=31180),
+            Extracted(name="Кипятильник Atesy Фонтан АКНЭ-100", price=63489),
+            Extracted(name="Стол, цвет белый", price=18321),
+        ],
+        "карта сайта",
+    )
+    chair = index.lookup("Стул с пюпитром", "", "шт.", "2026-09-29")
+    assert chair.price == 5200 and [(o.title, o.analog) for o in chair.offers] == [("Стул с пюпитром ИЗО, ткань черная", False), ("Стулья с пюпитром", True)]
+    assert index.lookup("Стол воспитателя", "", "шт.", "2026-09-29").price is None
+    assert index.lookup("Стеллаж металлический", "", "шт.", "2026-09-29").price == 6100
+    assert index.lookup("Наушники", "", "шт.", "2026-09-29").price == 1200
+    assert index.lookup("Посудомоечная машина", "", "шт.", "2026-09-29").status == "not_found"
+    assert index.lookup("Ванна котломоечная двухсекционная", "", "шт.", "2026-09-29").price is None  # число секций другое
+    # По нашему названию кипятильника нет, по названию из истории закупок — есть, с пометкой.
+    assert index.lookup("Кипятильник электрический", "", "шт.", "2026-09-29").price is None
+    boiler = index.lookup("Кипятильник электрический", "", "шт.", "2026-09-29", aliases=["Кипятильник Фонтан АКНЭ-100"])
+    assert boiler.price == 63489 and "по названию из истории закупок «Кипятильник Фонтан АКНЭ-100»" in boiler.offers[0].note
+    # Предложение без единого общего слова с нашим названием по чужому названию не засчитывается.
+    sink = index.lookup("Тумба медицинская с двойной мойкой", "", "шт.", "2026-09-29", aliases=["Стол-мойка медицинский, цвет белый"])
+    assert sink.status == "not_found"
 
 
 def test_supplier_endpoints_and_lookup(tmp_path: Path) -> None:

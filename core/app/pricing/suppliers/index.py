@@ -16,16 +16,19 @@ import tempfile
 import threading
 import uuid
 from collections import defaultdict, deque
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from ...models import InternetLookup, InternetOffer, Supplier, SupplierIndexInfo, SupplierOffer
-from ..history import normalize_name, tokens
+from ..history import analyze_name, normalize_name
 from ..params import Params, compare_params, extract_params
+from ..synonyms import RUSSIAN_WORD, stem
 from .crawler import SiteCrawler, normalize_site
-from .extract import Extracted
+from .extract import Extracted, looks_like_listing, product_name
 from .xlsx_import import read_price_list
 
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[3] / ".data"
@@ -49,16 +52,27 @@ def _host(site: str) -> str:
 PARAM_MATCH_BONUS = 0.1
 PARAM_CONFLICT_FACTOR = 0.75
 SECTION_BONUS = 0.05
+PLACEHOLDER_PRICE = 1.0  # «1 ₽» у магазинов — заглушка «цена по запросу», а не цена
 NOTE_PARAMS_MATCH = "параметры совпали"
+NOTE_PARAMS_PARTIAL = "параметры совпали не все: часть не указана"
 NOTE_PARAMS_CONFLICT = "параметры не совпали"
 NOTE_PARAMS_UNKNOWN = "параметры не указаны"
+PLURAL_ENDINGS = ("ы", "и", "ья")  # стулья, столы, стеллажи — так магазины называют разделы каталога
 
-Ranked = tuple[SupplierOffer, float, str]  # предложение, совпадение, пометка о параметрах
+
+class Ranked(NamedTuple):
+    """Предложение индекса с оценкой совпадения."""
+
+    offer: SupplierOffer
+    score: float
+    note: str  # пометка о параметрах
+    alias: str = ""  # совпало с названием позиции у поставщика из истории закупок, а не с нашим
 
 
 class OfferMatcher:
     """Индекс слово → предложения; оценка по словам та же, что у сопоставления с историей,
-    плюс проверка числовых параметров (габариты, объём, масса…) из характеристик позиции."""
+    плюс проверка числовых параметров (габариты, объём, масса…) из характеристик позиции и
+    проверка, что это тот же товар, а не соседний с теми же словами."""
 
     def __init__(self, offers: list[SupplierOffer] | None = None):
         self.offers: list[SupplierOffer] = []
@@ -66,65 +80,115 @@ class OfferMatcher:
         self.offer_tokens: list[set[str]] = []
         self.offer_keys: list[str] = []
         self.offer_params: list[Params] = []
+        self.offer_heads: list[str] = []  # главное слово (основа), если наименование начинается с существительного
+        self.offer_head_words: list[str] = []  # главное слово как написано — для проверки числа
+        self.offer_loose: list[set[str]] = []  # основы до и после замены оборотов — для проверки общих слов
         self.add(offers or [])
 
     def add(self, offers: list[SupplierOffer]) -> None:
         for offer in offers:
+            title = product_name(offer.name)  # без хвоста заголовка страницы, если он есть
+            if offer.price <= PLACEHOLDER_PRICE or looks_like_listing(title):
+                continue  # заглушка вместо цены или страница раздела — не товар
             i = len(self.offers)
             self.offers.append(offer)
-            toks = tokens(offer.name)
-            self.offer_tokens.append(toks)
-            self.offer_keys.append(normalize_name(offer.name))
-            self.offer_params.append(extract_params(offer.name))
-            for t in toks:
+            info = analyze_name(title)
+            self.offer_tokens.append(set(info.stems))
+            self.offer_keys.append(info.key)
+            self.offer_params.append(extract_params(title))
+            self.offer_heads.append(info.head)
+            self.offer_head_words.append(info.head_word)
+            self.offer_loose.append(info.loose)
+            for t in info.stems:
                 self.index[t].add(i)
 
-    def search(self, name: str, description: str = "", section: str = "") -> list[Ranked]:
-        key = normalize_name(name)
-        query = tokens(name)
-        if not query:
-            return []
+    def search(self, name: str, description: str = "", section: str = "", aliases: Iterable[str] = ()) -> list[Ranked]:
+        """Предложения по убыванию совпадения. Кроме нашего наименования, ищем и по названиям
+        позиции у поставщиков из истории закупок (``aliases``) — такое совпадение помечается и
+        засчитывается, только если у предложения есть хоть одно общее слово с нашим
+        наименованием или оно начинается с марки: «Стол, цвет белый» по названию «Стол-мойка
+        медицинский» — не «Тумба с мойкой»."""
         spec = extract_params(f"{name} {description}")
         section_key = section.strip().lower()
-        ranked: list[Ranked] = []
-        seen: set[int] = set()
-        for t in query:
-            for i in self.index.get(t, ()):
-                if i in seen:
-                    continue
-                seen.add(i)
-                score = self._score(key, query, i)
-                if section_key and self.offers[i].section and self.offers[i].section.strip().lower() == section_key:
-                    score = min(1.0, round(score + SECTION_BONUS, 3))  # прайс того же раздела — чуть надёжнее
-                note = ""
-                if not spec.empty():
-                    matches, conflicts = compare_params(spec, self.offer_params[i])
-                    if conflicts:
-                        # Другой размер/объём — это не та же позиция: не выше «похожего», в цену не входит.
-                        score = min(round(score * PARAM_CONFLICT_FACTOR, 3), MATCH_THRESHOLD - 0.01)
-                        note = NOTE_PARAMS_CONFLICT
-                    elif matches:
-                        score = min(1.0, round(score + PARAM_MATCH_BONUS, 3))
-                        note = NOTE_PARAMS_MATCH
-                    else:
-                        note = NOTE_PARAMS_UNKNOWN
-                if score >= ANALOG_THRESHOLD:
-                    ranked.append((self.offers[i], score, note))
+        own_loose = analyze_name(name).loose
+        best: dict[int, Ranked] = {}
+        for query_name, alias in [(name, ""), *((a, a) for a in aliases)]:
+            info = analyze_name(query_name)
+            if not info.stems:
+                continue
+            query = set(info.stems)
+            first = info.stems[0] if RUSSIAN_WORD.fullmatch(info.stems[0]) else ""
+            for i in set().union(*(self.index.get(t, ()) for t in query)):
+                if alias and not own_loose & self.offer_loose[i] and self.offer_heads[i]:
+                    continue  # по чужому названию — только то, что хоть словом похоже на наше (или марка с моделью)
+                ranked = self._rank(i, info.key, query, (first, info.head_word), spec, section_key, alias)
+                if ranked is not None and (i not in best or ranked.score > best[i].score):
+                    best[i] = ranked
         # При равном совпадении вперёд идут предложения с подтверждёнными параметрами, потом без указанных.
-        order = {NOTE_PARAMS_MATCH: 0, "": 1, NOTE_PARAMS_UNKNOWN: 1, NOTE_PARAMS_CONFLICT: 2}
-        return sorted(ranked, key=lambda item: (-item[1], order[item[2]], item[0].price))
+        order = {NOTE_PARAMS_MATCH: 0, NOTE_PARAMS_PARTIAL: 1, "": 2, NOTE_PARAMS_UNKNOWN: 2, NOTE_PARAMS_CONFLICT: 3}
+        return sorted(best.values(), key=lambda r: (-r.score, order[r.note], r.offer.price))
 
-    def _score(self, key: str, query: set[str], i: int) -> float:
+    def _rank(self, i: int, key: str, query: set[str], head: tuple[str, str], spec: Params, section_key: str, alias: str) -> Ranked | None:
+        score, common = self._score(key, query, i)
+        offer = self.offers[i]
+        if section_key and offer.section and offer.section.strip().lower() == section_key:
+            score = min(1.0, round(score + SECTION_BONUS, 3))  # прайс того же раздела — чуть надёжнее
+        note = ""
+        if not spec.empty():
+            matches, conflicts, missing = compare_params(spec, self.offer_params[i])
+            if conflicts:
+                # Другой размер/объём — это не та же позиция: не выше «похожего», в цену не входит.
+                score = min(round(score * PARAM_CONFLICT_FACTOR, 3), MATCH_THRESHOLD - 0.01)
+                note = NOTE_PARAMS_CONFLICT
+            elif matches:
+                score = min(1.0, round(score + PARAM_MATCH_BONUS, 3))
+                # «Совпали не все»: например, число полок то же, а размера у продавца нет.
+                note = NOTE_PARAMS_PARTIAL if missing else NOTE_PARAMS_MATCH
+            else:
+                note = NOTE_PARAMS_UNKNOWN
+        if score >= MATCH_THRESHOLD and not self._same_item(query, head, common, i):
+            score = round(MATCH_THRESHOLD - 0.01, 3)  # слова похожи, товар другой — в цену не входит
+        return Ranked(offer, score, note, alias) if score >= ANALOG_THRESHOLD else None
+
+    def _score(self, key: str, query: set[str], i: int) -> tuple[float, int]:
+        """Оценка по словам и число общих слов."""
         candidate = self.offer_tokens[i]
         if not candidate:
-            return 0.0
+            return 0.0, 0
         common = len(query & candidate)
-        score = 0.65 * common / len(query) + 0.35 * common / len(candidate)
         if self.offer_keys[i] == key:
-            return 1.0
+            return 1.0, common
+        score = 0.65 * common / len(query) + 0.35 * common / len(candidate)
         if self.offer_keys[i].startswith(key[:20]) or key.startswith(self.offer_keys[i][:20]):
             score = min(1.0, score + 0.15)
-        return round(score, 3)
+        return round(score, 3), common
+
+    def _same_item(self, query: set[str], head: tuple[str, str], common: int, i: int) -> bool:
+        """Тот ли это товар, а не соседний с теми же словами: общих слов не меньше двух (если в
+        запросе их два и больше), первое слово запроса есть в предложении, главное слово
+        предложения — в запросе, и предложение не во множественном числе там, где в проекте
+        единственное. Иначе «Столы» (страница раздела) сошлись бы со «Стол воспитателя»,
+        «Перегородка-стеллаж» — со «Стеллаж металлический», «Карнизы для штор» — со «Штора с карнизом»."""
+        first, number_word = head
+        if len(query) >= 2 and common < 2:
+            return False
+        if first and first not in self.offer_tokens[i]:
+            return False
+        offer_head = self.offer_heads[i]
+        if offer_head and offer_head not in query:
+            return False
+        return not _plural_for_singular(number_word, self.offer_head_words[i])
+
+
+def _plural_for_singular(query_word: str, offer_word: str) -> bool:
+    """У магазина главное слово во множественном числе («Стулья с пюпитром», «Кресла»), а в
+    проекте — в единственном: это раздел каталога с ценой «от», а не товар."""
+    if not query_word or not offer_word:
+        return False
+    if offer_word.endswith(PLURAL_ENDINGS) and not query_word.endswith(PLURAL_ENDINGS):
+        return True
+    # Средний род: кресло → кресла, зеркало → зеркала (у женского рода «-а» — единственное число).
+    return offer_word.endswith(("а", "я")) and query_word.endswith(("о", "е")) and stem(offer_word) == stem(query_word)
 
 
 class SupplierIndex:
@@ -490,24 +554,30 @@ class SupplierIndex:
             total = sum(len(o) for o in self.offers.values())
             return f"каталоги поставщиков: {total} позиций у {len(self.suppliers)} поставщиков"
 
-    def rank(self, name: str, description: str = "", section: str = "") -> list[Ranked]:
+    def rank(self, name: str, description: str = "", section: str = "", aliases: Iterable[str] = ()) -> list[Ranked]:
         """Предложения индекса по убыванию совпадения (не ниже порога «похоже»); параметры из
-        характеристик подтверждают или отводят совпадение, прайс того же раздела — небольшой плюс."""
+        характеристик подтверждают или отводят совпадение, прайс того же раздела — небольшой плюс.
+        ``aliases`` — названия позиции у поставщиков из истории закупок: подключаются, когда по
+        нашему названию меньше ``min_shops`` магазинов."""
         with self._lock:
-            return self._matcher.search(name, description, section)
+            ranked = self._matcher.search(name, description, section)
+            if aliases and self.matched_shops(ranked) < self.min_shops:
+                # По нашему названию рынка не хватает — добавляем найденное по названиям из истории.
+                ranked = self._matcher.search(name, description, section, aliases)
+            return ranked
 
     @staticmethod
     def matched_shops(ranked: list[Ranked]) -> int:
         """Сколько разных магазинов дали ту же позицию (совпадение не ниже MATCH_THRESHOLD)."""
-        return len({offer.supplier_id for offer, score, _ in ranked if score >= MATCH_THRESHOLD})
+        return len({r.offer.supplier_id for r in ranked if r.score >= MATCH_THRESHOLD})
 
-    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "") -> InternetLookup:
-        return self.build_lookup(self.rank(name, description, section), name, description, today)
+    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "", aliases: Iterable[str] = ()) -> InternetLookup:
+        return self.build_lookup(self.rank(name, description, section, aliases), name, description, today)
 
     def build_lookup(self, ranked: list[Ranked], name: str, description: str, today: str) -> InternetLookup:
         query = re.sub(r"\s+", " ", f"{name} {description}".strip())[:300]
         spec = extract_params(f"{name} {description}")
-        params_text = f"параметры {spec.describe()}" if not spec.empty() else ""
+        params_text = f"параметры {spec.describe(counts=True)}" if not spec.empty() else ""
         if not ranked:
             return InternetLookup(status="not_found", query=query, looked_up_at=today, provider="suppliers", comment="в каталогах поставщиков похожих позиций нет")
         shown = ranked[:OFFERS_SHOWN]
@@ -522,6 +592,7 @@ class SupplierIndex:
                     part
                     for part in (
                         f"совпадение {round(score * 100)}%",
+                        f"по названию из истории закупок «{alias[:60]}»" if alias else "",
                         note,
                         f"раздел «{offer.section}»" if offer.section else "",
                         f"арт. {offer.sku}" if offer.sku else "",
@@ -530,20 +601,23 @@ class SupplierIndex:
                     if part
                 ),
             )
-            for offer, score, note in shown
+            for offer, score, note, alias in shown
         ]
-        matched = [offer.price for offer, score, _ in ranked if score >= MATCH_THRESHOLD]
+        confident = [r for r in ranked if r.score >= MATCH_THRESHOLD]
+        matched = [r.offer.price for r in confident]
         if matched:
             price = float(statistics.median(matched))
-            suppliers = len({offer.supplier for offer, score, _ in ranked if score >= MATCH_THRESHOLD})
+            suppliers = len({r.offer.supplier for r in confident})
             low, high = (f"{value:,.0f}".replace(",", " ") for value in (min(matched), max(matched)))
             comment = f"совпадений {len(matched)} у {suppliers} поставщ., от {low} до {high} ₽; взята медиана"
-            if params_text and all(note == NOTE_PARAMS_UNKNOWN for _, score, note in ranked if score >= MATCH_THRESHOLD):
+            if params_text and all(r.note == NOTE_PARAMS_UNKNOWN for r in confident):
                 comment += "; в предложениях параметры не указаны — проверьте размер"
+            elif params_text and not any(r.note == NOTE_PARAMS_MATCH for r in confident):
+                comment += "; в предложениях указаны не все параметры — проверьте размер"
         else:
             price = None
             comment = "точных совпадений нет, показаны похожие позиции — цену выбирает оператор"
-            if params_text and any(note == NOTE_PARAMS_CONFLICT for _, _, note in ranked):
+            if params_text and any(r.note == NOTE_PARAMS_CONFLICT for r in ranked):
                 comment = "по словам похоже, но параметры другие — цену выбирает оператор"
         if params_text:
             comment = f"{params_text}; {comment}"

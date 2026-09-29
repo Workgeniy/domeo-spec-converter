@@ -41,6 +41,7 @@ class HistoryCandidate(BaseModel):
     name: str
     group: str = ""
     score: float = 0.0  # 1.0 — точное совпадение наименования
+    alias: str = ""  # совпало не с нашим наименованием, а с названием у поставщика из истории
     price_min: float | None = None
     price_max: float | None = None
     price_median: float | None = None
