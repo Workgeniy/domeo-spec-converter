@@ -52,7 +52,7 @@ public sealed class InternetApiTests : IClassFixture<ApiFactory>
             items = new object[]
             {
                 new { id = "d1:0", name = "Стол обеденный", search_params = new[] { new { name = "Материал ножек", value = "металл" } } },
-                new { id = "d1:1", name = "Стул" },
+                new { id = "d1:1", name = "Стул", type_mark = "по типу Polair CM107-S" },
             },
         });
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -60,6 +60,8 @@ public sealed class InternetApiTests : IClassFixture<ApiFactory>
         Assert.Equal("Материал ножек", Assert.Single(sent[0].SearchParams).Name);
         Assert.Equal("металл", sent[0].SearchParams[0].Value);
         Assert.Empty(sent[1].SearchParams); // не передали — пустой список
+        Assert.Equal("по типу Polair CM107-S", sent[1].TypeMark);
+        Assert.Equal("", sent[0].TypeMark);
         var lookups = (await response.Content.ReadFromJsonAsync<JsonNode>())!["data"]!["lookups"]!;
         Assert.Equal("металл", lookups["d1:0"]!["params"]![0]!["value"]!.GetValue<string>());
 

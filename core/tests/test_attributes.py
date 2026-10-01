@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.models import SearchParam
-from app.pricing.attributes import CONFLICT, MATCH, UNKNOWN, check, clean_params, params_key, parse_params
+from app.pricing.attributes import CONFLICT, MATCH, UNKNOWN, check, clean_params, described_params, params_key, parse_params
 from app.pricing.history import analyze_name, normalize_name
 
 
@@ -48,6 +48,48 @@ def test_colour_and_free_text() -> None:
     assert statuses([("Цвет каркаса", "черный")], "Стол ЛДСП, каркас белый, столешница черная") == [CONFLICT]
     assert statuses([("Производитель", "Abat")], "Пароконвектомат Abat ПКА 6-1/1ПП2") == [MATCH]
     assert statuses([("Производитель", "Abat")], "Пароконвектомат Rational iCombi") == [UNKNOWN]  # без словаря — не опровергаем
+
+
+def labels(name: str, description: str) -> list[str]:
+    return [w.label for w in described_params(name, description)]
+
+
+def test_params_from_description() -> None:
+    assert labels("Стол производственный", "Стол производственный, нержавеющая сталь, борт, полка, 1000х600х870(h)") == [
+        "материал — нержавеющая сталь",
+        "с бортом",
+        "с полкой",
+    ]
+    # Материал части — по перечислению через запятую: «цвет каркаса хромированный» — о каркасе.
+    chair = "Стул офисный на металлическом каркасе, каркас металлическая труба, цвет каркаса хромированный, сиденье и спинка - экокожа"
+    assert labels("Стул офисный", chair) == ["материал каркаса — хром", "материал сиденья — экокожа", "материал спинки — экокожа"]
+    assert labels("Стол обеденный", "Стол обеденный, столешница ЛДСП, ножки металл") == ["материал столешницы — ЛДСП", "материал ножек — металл"]
+    # Порода дерева при ЛДСП — цвет декора; «МДФ/ЛДСП» — любой из двух.
+    assert labels("Стол воспитателя", "Стол воспитателя, МДФ/ЛДСП толщиной 16мм, цвет бук") == ["материал — МДФ или ЛДСП"]
+    # «пристенный или островной» — выбор, а не признак.
+    assert labels("Стол", "Стол пристенный или островной, нержавеющая сталь") == ["материал — нержавеющая сталь"]
+
+
+def test_params_from_description_checks() -> None:
+    table = described_params("Стол производственный", "Стол производственный, нержавеющая сталь, борт, полка")
+
+    def verdicts(title: str) -> list[str]:
+        return [check(w, normalize_name(title), analyze_name(title).loose) for w in table]
+
+    assert verdicts("Стол СРТ-ПН AISI 304 с бортом и полкой") == [MATCH, MATCH, MATCH]
+    assert verdicts("Стол производственный оцинкованный с полкой") == [CONFLICT, UNKNOWN, MATCH]
+    assert verdicts("Стол производственный без борта") == [UNKNOWN, CONFLICT, UNKNOWN]
+    # Материалы разных семейств (пластиковый бак, нержавеющая тележка) — без противоречия.
+    cart = described_params("Тележка с баком", "Тележка с баком, бак - пластик, тележка - нержавеющая сталь")
+    assert [w.soft for w in cart] == [True]
+    assert check(cart[0], normalize_name("Тележка оцинкованная"), analyze_name("Тележка оцинкованная").loose) == UNKNOWN
+    # Материал при части в названии предложения («пластиковый корпус») — не о всём изделии.
+    scales = described_params("Весы напольные", "Весы напольные, платформа нержавеющая сталь")
+    assert check(scales[0], normalize_name("Весы напольные, пластиковый корпус"), analyze_name("Весы напольные пластиковый корпус").loose) == UNKNOWN
+    assert check(scales[0], normalize_name("Весы напольные из пластика"), analyze_name("Весы напольные из пластика").loose) == CONFLICT
+    # Что оператор задал сам, из характеристик не берётся.
+    manual = parse_params([SearchParam(name="Материал", value="металл")])
+    assert [w.label for w in described_params("Стол производственный", "нержавеющая сталь, борт", manual)] == ["с бортом"]
 
 
 def test_parse_clean_and_query() -> None:

@@ -45,7 +45,7 @@ interface FlatRow {
 }
 
 function lookupItem(id: string, row: SummaryRow, params: SearchParam[] = row.search_params ?? []): MatchRequestItem {
-  return { id, name: row.name, description: row.description, unit: row.unit, section: row.section, search_params: params }
+  return { id, name: row.name, description: row.description, unit: row.unit, section: row.section, search_params: params, type_mark: row.type_mark }
 }
 
 /** Цену ещё не искали, поиск упал или параметры оператора поменяли после поиска. */
@@ -508,6 +508,7 @@ export function CostPanel({ onDownload, downloading }: Props) {
         rowId={editingRow?.id ?? null}
         name={editingRow?.row.name ?? ''}
         description={editingRow?.row.description ?? ''}
+        typeMark={editingRow?.row.type_mark ?? ''}
         params={editingRow?.row.search_params ?? []}
         canSearch={internet?.configured === true}
         onClose={() => setEditing(null)}

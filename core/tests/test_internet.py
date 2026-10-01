@@ -25,7 +25,7 @@ class FakeProvider:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "", params=()) -> InternetLookup:
+    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "", params=(), type_mark: str = "") -> InternetLookup:
         self.calls.append(name)
         if "нет" in name.lower():
             return InternetLookup(status="not_found", query=name, looked_up_at=today, provider=self.name, comment="ничего похожего")
@@ -109,7 +109,7 @@ def test_service_passes_operator_params_and_keys_cache_by_them(tmp_path: Path) -
             super().__init__()
             self.params: list[list[tuple[str, str]]] = []
 
-        def lookup(self, name: str, description: str, unit: str, today: str, section: str = "", params=()) -> InternetLookup:
+        def lookup(self, name: str, description: str, unit: str, today: str, section: str = "", params=(), type_mark: str = "") -> InternetLookup:
             self.params.append([(p.name, p.value) for p in params])
             return super().lookup(name, description, unit, today, section, params)
 
@@ -125,6 +125,9 @@ def test_service_passes_operator_params_and_keys_cache_by_them(tmp_path: Path) -
     assert service.lookup_many([MatchRequestItem(id="c", name="Стол обеденный", search_params=same)])["c"].params == with_params.params
     assert service.lookup_many([MatchRequestItem(id="d", name="Стол обеденный")])["d"].params == []
     assert len(provider.params) == 2
+    # Модель из «Тип, марка» — тоже часть позиции: другой эталон — другой поиск.
+    assert InternetPriceService.cache_key("Стол", "", type_mark="по типу СП-1200") != InternetPriceService.cache_key("Стол", "")
+    assert InternetPriceService.cache_key("Стол", "") == "стол|"  # без параметров и модели ключ прежний
 
 
 def test_internet_endpoints(tmp_path: Path) -> None:

@@ -124,6 +124,8 @@ public sealed record MatchRequestItem(string Id, string Name, string Description
 {
     /// <summary>Для поиска в интернете: параметры оператора (материал, цвет…).</summary>
     public IReadOnlyList<SearchParam> SearchParams { get; init; } = [];
+    /// <summary>Графа «Тип, марка»: «по типу Polair CM107-S» — эталонная модель для поиска.</summary>
+    public string TypeMark { get; init; } = "";
 }
 
 /// <summary>Изменение цен одних и тех же позиций между двумя годами.</summary>

@@ -114,6 +114,8 @@ interface Props {
   name: string
   /** Характеристики позиции — из них подсказываются материал и цвет. */
   description: string
+  /** Графа «Тип, марка»: модель, по которой ищут автоматически. */
+  typeMark: string
   params: SearchParam[]
   canSearch: boolean
   onClose: () => void
@@ -121,7 +123,7 @@ interface Props {
 }
 
 /** Параметры поиска цены по позиции: материал, материал ножек, цвет, производитель… */
-export function SearchParamsModal({ rowId, name, description, params, canSearch, onClose, onSave }: Props) {
+export function SearchParamsModal({ rowId, name, description, typeMark, params, canSearch, onClose, onSave }: Props) {
   const [items, setItems] = useState<SearchParam[]>([])
 
   useEffect(() => {
@@ -146,10 +148,18 @@ export function SearchParamsModal({ rowId, name, description, params, canSearch,
         <Text size="sm" fw={500} lineClamp={2}>
           {name}
         </Text>
+        {typeMark.trim() && (
+          <Text size="xs">
+            <Text span c="dimmed">
+              Тип, марка в проекте:{' '}
+            </Text>
+            {typeMark} — по этой модели ищем в первую очередь.
+          </Text>
+        )}
         <Text size="xs" c="dimmed">
-          Параметры уходят в поисковый запрос и сверяются с названиями предложений. Где они подтвердились — цена по этим предложениям;
-          где противоречат (другой материал, цвет) — в цену не входят; где не указаны — входят с пометкой «проверьте». Числа — с
-          единицами: 20 л, 2 кВт, 1200х600 мм.
+          Размеры, материал и признаки из характеристик учитываются сами. Здесь можно уточнить то, чего в характеристиках нет
+          (материал ножек, цвет, производитель). Параметры уходят в поисковый запрос и сверяются с названиями предложений: где они
+          подтвердились — цена по этим предложениям; где противоречат — в цену не входят. Числа — с единицами: 20 л, 2 кВт, 1200х600 мм.
         </Text>
         {items.map((p, i) => (
           <Group key={i} gap="xs" wrap="nowrap" align="flex-start">

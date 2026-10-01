@@ -192,6 +192,49 @@ def test_auto_provider_uses_operator_params(tmp_path: Path) -> None:
     assert build_query("Стул детский", "", "") == "Стул детский купить"
 
 
+FRIDGE = """<html><head><title>Шкаф холодильный Polair CM107-S — ХолодОпт</title>
+<script type="application/ld+json">{"@type":"Product","name":"Шкаф холодильный Polair CM107-S","offers":{"@type":"Offer","price":"79 900","priceCurrency":"RUB"}}</script>
+</head><body></body></html>"""
+
+
+class ModelEngine:
+    """Находит страницу только по модели из проекта."""
+
+    name = "fake-search"
+
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def search(self, query: str, max_results: int = 8) -> list[SearchHit]:
+        self.queries.append(query)
+        return [SearchHit(url="https://holod-opt.test/cm107s", title="Polair CM107-S")] if "CM107-S" in query else []
+
+
+def test_auto_provider_searches_reference_model_first(tmp_path: Path) -> None:
+    index = SupplierIndex(data_dir=tmp_path)
+    index.set_settings(autocrawl_pages=0, min_shops=1)
+    shop = index.add("Кухни-Про", "kuhni.test")
+    index.set_offers(shop.id, [Extracted(name="Шкаф холодильный среднетемпературный Carboma R700", price=82000)], "карта сайта")
+    pages = {"https://holod-opt.test/cm107s": FRIDGE, "https://holod-opt.test/robots.txt": ""}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = pages.get(str(request.url))
+        return httpx.Response(200, headers={"content-type": "text/html"}, content=body.encode("utf-8")) if body is not None else httpx.Response(404)
+
+    engine = ModelEngine()
+    web = WebPriceSearch(engine, index, data_dir=tmp_path, client=httpx.Client(transport=httpx.MockTransport(handler)), page_delay=0)
+    provider = AutoSearchProvider(index, web)
+    name = "Шкаф холодильный среднетемпературный"
+    # Похожих магазинов хватает (порог 1), но модели из проекта в индексе нет — ищем её, и цена по ней.
+    lookup = provider.lookup(name, "", "шт.", "2026-10-01", type_mark="по типу Polair CM107-S")
+    assert engine.queries == ["шкаф Polair CM107-S купить"]
+    assert lookup.price == 79900 and lookup.offers[0].note.startswith("модель как в проекте")
+    # Модель уже в индексе — в интернет не идём; без модели в проекте — как раньше.
+    provider.lookup(name, "", "шт.", "2026-10-01", type_mark="по типу Polair CM107-S")
+    provider.lookup(name, "", "шт.", "2026-10-01")
+    assert len(engine.queries) == 1
+
+
 BOILER = """<html><head><title>Кипятильник Atesy Фонтан АКНЭ-100 — ПроКухня</title>
 <script type="application/ld+json">{"@type":"Product","name":"Кипятильник Atesy Фонтан АКНЭ-100","offers":{"@type":"Offer","price":"63 489","priceCurrency":"RUB"}}</script>
 </head><body></body></html>"""

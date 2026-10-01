@@ -1,12 +1,14 @@
-"""Параметры поиска цены, которые задаёт оператор: «Материал ножек: металл», «Цвет: серый»,
-«Производитель: Abat», «Объём: 20 л».
+"""Текстовые параметры позиции для поиска цены: материал, цвет, признаки («пристенный», «с
+бортом», «газовый»). Их задаёт оператор («Материал ножек: металл», «Производитель: Abat»,
+«Объём: 20 л») или они берутся сами из наименования и характеристик (described_params).
 
 Числовые (с единицами) идут туда же, куда параметры из характеристик (params.py). Текстовые
 уходят в поисковый запрос и сверяются с названием предложения:
 
-- материал и цвет — по словарю. «Металл» подтверждается и «нержавеющей сталью» (она частный
-  случай), «нержавеющая сталь» просто «сталью» не подтверждается, но и не опровергается
-  («не указано»), а «ЛДСП» вместо «металла» — противоречие;
+- материал, цвет и признаки — по словарю. «Металл» подтверждается и «нержавеющей сталью»
+  (она частный случай), «нержавеющая сталь» просто «сталью» не подтверждается, но и не
+  опровергается («не указано»), а «ЛДСП» вместо «металла» — противоречие. Признаки
+  противоречат только своей группе: «пристенный» — «островному», «электрический» — «газовому»;
 - материал части изделия («Материал ножек») ищется рядом со словом «ножки» в названии; если
   ножки в названии не названы, противоречия нет — материал там может быть о столешнице;
 - породы дерева рядом с ЛДСП и МДФ — это цвет декора («ЛДСП дуб сонома»), а не материал;
@@ -22,14 +24,15 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 
 from ..models import SearchParam
-from .history import normalize_name, stems
+from .history import analyze_name, normalize_name, stems
 from .params import Params, compare_params, extract_params
+from .synonyms import stem
 
 MAX_PARAMS = 10
 NAME_LIMIT = 60
 VALUE_LIMIT = 120
 MATCH, CONFLICT, UNKNOWN = "match", "conflict", "unknown"
-MATERIAL, COLOUR, TEXT = "material", "colour", "text"
+MATERIAL, COLOUR, FEATURE, TEXT = "material", "colour", "feature", "text"
 NEAR_WORDS = 2  # материал части изделия ищем не дальше двух слов от её названия
 
 _B = r"(?<![а-яa-z0-9])"
@@ -124,7 +127,28 @@ COLOURS = _vocabulary(
         ("клён", r"клен\w*", ""),
     ]
 )
-VOCABULARIES = {MATERIAL: MATERIALS, COLOUR: COLOURS}
+# Признаки: внутри группы взаимоисключающие, между группами не сравниваются.
+_FEATURE_ROWS = [
+    ("пристенный", r"пристенн\w*", "установка"),
+    ("островной", r"островн\w*|центральн\w*", "установка"),
+    ("настенный", r"настенн\w*|навесн\w*", "крепление"),
+    ("напольный", r"напольн\w*", "крепление"),
+    ("передвижной", r"передвижн\w*|мобильн\w*|на\s+колес\w*", "перемещение"),
+    ("стационарный", r"стационарн\w*", "перемещение"),
+    ("с бортом", r"(?:с\s+)?борт(?:ом|ами|иком|ик)?", "борт"),
+    ("без борта", r"без\s+борт\w*", "борт"),
+    ("с полкой", r"(?:с\s+)?полк(?:ой|а)|(?:с\s+)?нижн\w*\s+полк\w*", "полка"),
+    ("без полки", r"без\s+полк\w*", "полка"),
+    ("электрический", r"электрическ\w*|электро(?!н)\w*", "питание"),
+    ("газовый", r"газов\w*", "питание"),
+    ("перфорированные полки", r"перфорирован\w*", "полки"),
+    ("сплошные полки", r"сплошн\w*", "полки"),
+    ("односторонний", r"односторонн\w*", "стороны"),
+    ("двусторонний", r"двусторонн\w*|двухсторонн\w*", "стороны"),
+]
+FEATURES = _vocabulary([(name, pattern, "") for name, pattern, _ in _FEATURE_ROWS])
+FEATURE_GROUP = {name: group for name, _, group in _FEATURE_ROWS}
+VOCABULARIES = {MATERIAL: MATERIALS, COLOUR: COLOURS, FEATURE: FEATURES}
 BOARDS = {"ДСП", "ЛДСП", "МДФ", "ХДФ"}
 WOOD_SPECIES = {name for name, term in MATERIALS.items() if term.parent == "дерево" and name != "массив дерева"}
 
@@ -196,11 +220,13 @@ class Wanted:
     """Текстовый параметр оператора, готовый к сверке с названием предложения."""
 
     label: str  # «материал ножек — металл»
-    kind: str  # material | colour | text
-    terms: tuple[str, ...] = ()  # термины словаря (материал, цвет)
+    kind: str  # material | colour | feature | text
+    terms: tuple[str, ...] = ()  # термины словаря (материал, цвет, признак)
     part: str = ""  # часть изделия («ножки»)
     words: tuple[str, ...] = ()  # основы слов значения (для остального)
     query: str = ""  # слова для поисковика: «ножки металл»
+    any_of: bool = False  # хватит одного из терминов («МДФ/ЛДСП»), иначе нужны все
+    soft: bool = False  # противоречие не считаем — только совпало / не указано
 
 
 @dataclass
@@ -280,6 +306,8 @@ def _wanted(param: SearchParam, has_numbers: bool) -> Wanted | None:
         kind = MATERIAL
     elif find_terms(value, COLOUR):
         kind = COLOUR
+    elif find_terms(value, FEATURE):
+        kind = FEATURE
     else:
         kind = TEXT
     terms = tuple(dict.fromkeys(f.term for f in find_terms(value, kind))) if kind != TEXT else ()
@@ -299,15 +327,16 @@ def _has_word(word: str, offer_words: set[str]) -> bool:
 
 def _near(found: list[Found], positions: list[int], part_words: set[int]) -> list[Found]:
     """Термины у названия части изделия: в том же слове («металлокаркас»), потом после него
-    («ножки металлические»), потом перед ним («на металлических ножках»), не дальше NEAR_WORDS
-    и не перескакивая через другую часть («столешница ЛДСП, ножки металл»)."""
+    («ножки металлические», «ножки из металла» — не дальше NEAR_WORDS), потом прямо перед ним
+    («на металлических ножках»), не перескакивая через другую часть («столешница ЛДСП, ножки
+    металл»)."""
     result: list[Found] = []
     for p in positions:
         hits = [f for f in found if f.start <= p <= f.end]
-        for step in (1, -1):
+        for step, reach in ((1, NEAR_WORDS), (-1, 1)):
             if hits:
                 break
-            for distance in range(1, NEAR_WORDS + 1):
+            for distance in range(1, reach + 1):
                 i = p + step * distance
                 if i in part_words:
                     break
@@ -326,9 +355,12 @@ def check(wanted: Wanted, norm: str, offer_words: set[str]) -> str:
     found = list(find_terms(norm, wanted.kind))
     if wanted.kind == MATERIAL and any(f.term in BOARDS for f in found):
         found = [f for f in found if f.term not in WOOD_SPECIES]  # «ЛДСП дуб сонома» — дуб тут цвет
-    may_conflict = True
+    if wanted.kind == FEATURE:
+        groups = {FEATURE_GROUP[t] for t in wanted.terms}
+        found = [f for f in found if FEATURE_GROUP[f.term] in groups]  # «пристенный» не спорит с «газовым»
+    may_conflict = not wanted.soft
+    parts = find_parts(norm) if wanted.kind != FEATURE else ()
     if wanted.part:
-        parts = find_parts(norm)
         positions = [i for name, i in parts if name == wanted.part]
         if positions:
             found = _near(found, positions, {i for _, i in parts})
@@ -337,13 +369,31 @@ def check(wanted: Wanted, norm: str, offer_words: set[str]) -> str:
     names = {f.term for f in found}
     ancestors = ANCESTORS[wanted.kind]
     satisfied = [w for w in wanted.terms if any(t == w or w in ancestors[t] for t in names)]
-    if len(satisfied) == len(wanted.terms):
+    if satisfied and (wanted.any_of or len(satisfied) == len(wanted.terms)):
         return MATCH
     if satisfied or not names or not may_conflict:
         return UNKNOWN
+    if not wanted.part and parts:
+        # Материал у части в названии предложения («пластиковый корпус») — о части, а не обо
+        # всём изделии: для материала изделия это не противоречие.
+        attached = set(_near(found, [i for _, i in parts], {i for _, i in parts}))
+        names = {f.term for f in found if f not in attached}
+        if not names:
+            return UNKNOWN
     if any(t in ancestors[w] for t in names for w in wanted.terms):
         return UNKNOWN  # в названии общее слово («сталь»), а нужно частное («нержавеющая сталь»)
     return CONFLICT
+
+
+def compare_wanted(wanted: Iterable[Wanted], norm: str, offer_words: set[str]) -> tuple[int, int, int]:
+    """(совпало, противоречит, не указано) по списку текстовых параметров."""
+    matches = conflicts = missing = 0
+    for item in wanted:
+        status = check(item, norm, offer_words)
+        matches += status == MATCH
+        conflicts += status == CONFLICT
+        missing += status == UNKNOWN
+    return matches, conflicts, missing
 
 
 @dataclass(frozen=True)
@@ -357,15 +407,112 @@ class Verdict:
 def compare_manual(manual: ManualParams, norm: str, offer_words: set[str], offer_params: Params) -> Verdict:
     """Сверка параметров оператора с предложением. Счётчики — по текстовым (числовые считаются
     вместе с параметрами из характеристик, params.compare_params), «подтверждено» — по всем."""
-    matches = conflicts = missing = 0
-    for wanted in manual.wanted:
-        status = check(wanted, norm, offer_words)
-        matches += status == MATCH
-        conflicts += status == CONFLICT
-        missing += status == UNKNOWN
+    matches, conflicts, missing = compare_wanted(manual.wanted, norm, offer_words)
     numbers_ok = True
     if manual.required is not None and not manual.required.empty():
         m, c, x = compare_params(manual.required, offer_params)
         numbers_ok = m > 0 and not c and not x
     confirmed = manual.checkable() and not conflicts and not missing and numbers_ok
     return Verdict(matches, conflicts, missing, confirmed)
+
+
+# ---------- параметры из наименования и характеристик ----------
+
+CLAUSES = re.compile(r"[,;:()\n]+|\.(?!\d)")  # характеристики перечисляют свойства через запятую
+PART_LABELS = {
+    "ножки": "ножек",
+    "каркас": "каркаса",
+    "столешница": "столешницы",
+    "корпус": "корпуса",
+    "фасад": "фасадов",
+    "обивка": "обивки",
+    "сиденье": "сиденья",
+    "спинка": "спинки",
+    "дверцы": "дверец",
+    "полки": "полок",
+    "ручки": "ручек",
+    "мойка": "мойки",
+}
+
+
+def _clause_materials(norm: str, drop: set[str]) -> list[tuple[str, str]]:
+    """(часть изделия или «», материал) в одном перечислении: «столешница ЛДСП» → столешница;
+    «сиденье и спинка — экокожа» → обе; без части — материал изделия в целом. Если материалов
+    в перечислении несколько, к части относится только стоящий вплотную к ней: «стул
+    пластиковый на металлокаркасе» — пластиковый стул на металлическом каркасе."""
+    found = [f for f in find_terms(norm, MATERIAL) if f.term not in drop]
+    if not found:
+        return []
+    parts = find_parts(norm)
+    if not parts:
+        return [("", f.term) for f in found]
+    if len(found) == 1:
+        return [(name, found[0].term) for name in dict.fromkeys(name for name, _ in parts)]
+    result: list[tuple[str, str]] = []
+    for f in found:
+        near = [name for name, i in parts if f.start - 1 <= i <= f.end + 1]
+        result.append((near[0] if near else "", f.term))
+    return result
+
+
+def _most_specific(terms: Iterable[str], kind: str) -> tuple[str, ...]:
+    """Без более общих, если есть частные: из «металл» и «нержавеющая сталь» — только сталь."""
+    unique = list(dict.fromkeys(terms))
+    ancestors = ANCESTORS[kind]
+    return tuple(t for t in unique if not any(t in ancestors[o] for o in unique if o != t))
+
+
+def _root(term: str) -> str:
+    """Семейство материала: нержавеющая сталь → металл, ЛДСП → ДСП."""
+    return next((t for t in ANCESTORS[MATERIAL][term] if not MATERIALS[t].parent), term)
+
+
+@lru_cache(maxsize=8192)
+def _described(name: str, description: str) -> tuple[Wanted, ...]:
+    clauses = [normalize_name(c) for c in [name, *CLAUSES.split(description or "")]]
+    whole = " ".join(clauses)
+    # Породы дерева рядом с ЛДСП и МДФ где угодно в характеристиках — цвет декора.
+    drop = WOOD_SPECIES if any(f.term in BOARDS for f in find_terms(whole, MATERIAL)) else set()
+    by_part: dict[str, list[str]] = {}
+    for clause in clauses:
+        for part, term in _clause_materials(clause, drop):
+            by_part.setdefault(part, []).append(term)
+    # Материалы разных семейств (пластиковый стул на металлокаркасе, тележка с пластиковым
+    # баком): какой из них о всём изделии, неизвестно — тогда для материала изделия только
+    # совпадение, без противоречия.
+    mixed = len({_root(t) for terms in by_part.values() for t in terms}) > 1
+    result: list[Wanted] = []
+    for part, terms in by_part.items():
+        chosen = _most_specific(terms, MATERIAL)
+        if part:
+            label = f"материал {PART_LABELS.get(part, part)} — {' или '.join(chosen)}"
+            result.append(Wanted(label=label, kind=MATERIAL, terms=chosen, part=part, any_of=True))
+        else:
+            result.append(Wanted(label=f"материал — {' или '.join(chosen)}", kind=MATERIAL, terms=chosen, any_of=True, soft=mixed))
+    # Признак — не само изделие: у «Полки кухонной» нет признака «с полкой».
+    head = analyze_name(name).head
+    words = whole.split(" ")
+    by_group: dict[str, list[str]] = {}
+    for f in find_terms(whole, FEATURE):
+        if head and any(stem(w) == head for w in words[f.start : f.end + 1]):
+            continue  # «полка» в описании полки — это само изделие
+        by_group.setdefault(FEATURE_GROUP[f.term], []).append(f.term)
+    for terms in by_group.values():
+        unique = tuple(dict.fromkeys(terms))
+        if len(unique) == 1:  # «пристенный или островной» — не признак, а выбор
+            result.append(Wanted(label=unique[0], kind=FEATURE, terms=unique))
+    return tuple(result)
+
+
+def described_params(name: str, description: str, manual: ManualParams | None = None) -> list[Wanted]:
+    """Материал и признаки, уже названные в наименовании и характеристиках, — мягкие параметры:
+    совпадение поднимает предложение, противоречие уводит его в «похожие» (как размеры из
+    характеристик), но цена не ограничивается подтвердившими. Цвет не берём: один и тот же
+    товар разных цветов стоит одинаково. Что оператор задал сам, отсюда не берётся."""
+    taken_parts = {w.part for w in manual.wanted if w.kind == MATERIAL} if manual else set()
+    taken_groups = {FEATURE_GROUP[t] for w in manual.wanted if w.kind == FEATURE for t in w.terms} if manual else set()
+    return [
+        w
+        for w in _described(name, description)
+        if not (w.kind == MATERIAL and w.part in taken_parts) and not (w.kind == FEATURE and FEATURE_GROUP[w.terms[0]] in taken_groups)
+    ]

@@ -224,14 +224,17 @@ def test_parameters_separate_sizes(tmp_path: Path) -> None:
     assert by_title["Стеллаж 2000x1000x500 с 4 перфорированными полками"].analog
     # Число полок совпало, размера у продавца нет — в цене, но с пометкой «совпали не все».
     assert not by_title["Стеллаж с перфорированными полками, 4 полки"].analog and "совпали не все" in by_title["Стеллаж с перфорированными полками, 4 полки"].note
-    assert sized.price == (9000 + 10180) / 2 and sized.comment.startswith("параметры 2000x1000x400 полок 4;")
+    # В комментарии — что взято из характеристик: размеры, число полок, материал и признак.
+    assert sized.price == (9000 + 10180) / 2
+    assert sized.comment.startswith("параметры из характеристик: 2000x1000x400 полок 4, материал — металл, перфорированные полки;")
     assert sized.offers[0].title.startswith("Стеллаж 2000x1000x400")  # совпавший размер — первым
     # Только чужие размеры: цены нет, оператору честно сказано почему.
     other = index.lookup("Стеллаж 2500x1000x400", "2500х1000х400(h)", "шт.", "2026-09-25")
     assert other.price is not None  # 2500-й совпал по словам и по размеру
     # Размер, которого нет ни у кого: в цену попадает только предложение без размера, с просьбой проверить.
+    # (перфорированные полки из наименования совпали, размер — нет: «совпали не все»).
     unknown = index.lookup("Стеллаж с перфорированными полками", "3000х1200х600(h)", "шт.", "2026-09-25")
-    assert unknown.status == "found" and unknown.price == 9000 and "параметры не указаны" in unknown.offers[0].note
+    assert unknown.status == "found" and unknown.price == 9000 and "совпали не все" in unknown.offers[0].note
     assert "проверьте размер" in unknown.comment and [o.analog for o in unknown.offers[1:]] == [True, True, True]
 
 
@@ -316,6 +319,35 @@ def test_operator_params_pick_offers_and_price(tmp_path: Path) -> None:
     index.set_offers(other.id, [Extracted(name="Стол обеденный 1200х800", price=12000), Extracted(name="Стол обеденный 1600х900", price=15000)], "карта сайта")
     sized = index.lookup("Стол обеденный", "", "шт.", "2026-10-01", params=[SearchParam(name="Размер", value="1200х800 мм")])
     assert sized.price == 12000 and not {o.title: o for o in sized.offers}["Стол обеденный 1200х800"].analog
+
+
+def test_reference_model_from_project(tmp_path: Path) -> None:
+    index = SupplierIndex(data_dir=tmp_path)
+    shop = index.add("Холод-Опт", "holod.test")
+    other = index.add("Кухни-Про", "kuhni.test")
+    index.set_offers(
+        shop.id,
+        [
+            Extracted(name="Polair СМ107-S (R290)", price=78000),  # русские С и М, слов «шкаф холодильный» нет
+            Extracted(name="Шкаф холодильный среднетемпературный Polair CM105-S", price=61000),
+            Extracted(name="Шкаф холодильный среднетемпературный Carboma R700", price=82000),
+        ],
+        "карта сайта",
+    )
+    index.set_offers(other.id, [Extracted(name="Шкаф холодильный Polair CM107-S Grande", price=80000)], "карта сайта")
+    name, description = "Шкаф холодильный среднетемпературный 700л", ""
+    # По словам «Polair CM107-S» почти не похож на наименование — без модели он не в цене.
+    plain = index.lookup(name, description, "шт.", "2026-10-01")
+    assert plain.price == (61000 + 82000) / 2 and all(not o.note.startswith("модель как в проекте") for o in plain.offers)
+    # С моделью из «Тип, марка»: та самая модель — первой, цена по ней, остальные модели — для сравнения.
+    model = index.lookup(name, description, "шт.", "2026-10-01", type_mark="по типу Polair CM107-S")
+    assert model.price == 79000 and [o.title for o in model.offers[:2]] == ["Polair СМ107-S (R290)", "Шкаф холодильный Polair CM107-S Grande"]
+    assert model.offers[0].note.startswith("модель как в проекте") and not model.offers[0].analog
+    assert model.comment.startswith("модель в проекте: Polair CM107-S; параметры из характеристик: 700 л;")
+    assert "по модели из проекта совпадений 2 у 2 поставщ." in model.comment and "ещё 2 других моделей в цену не вошли" in model.comment
+    # Модели в каталогах нет — честно сказано, цена по похожим.
+    missing = index.lookup(name, description, "шт.", "2026-10-01", type_mark="по типу Бирюса 700")
+    assert missing.price == plain.price and missing.comment.startswith("модель в проекте: Бирюса 700 — в каталогах её нет, цена по похожим")
 
 
 def test_supplier_endpoints_and_lookup(tmp_path: Path) -> None:

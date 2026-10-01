@@ -221,6 +221,8 @@ export interface MatchRequestItem {
   section?: string
   /** Для поиска в интернете: параметры оператора (материал, цвет…). */
   search_params?: SearchParam[]
+  /** Графа «Тип, марка»: «по типу Polair CM107-S» — эталонная модель для поиска. */
+  type_mark?: string
 }
 
 /** Состояние поиска цен в интернете: настроен ли, чем ищем (claude | suppliers | fake), сколько в кэше. */

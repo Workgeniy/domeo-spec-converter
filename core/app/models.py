@@ -269,6 +269,7 @@ class MatchRequestItem(BaseModel):
     unit: str = ""  # для поиска в интернете: цена нужна за эту единицу
     section: str = ""  # раздел КП: прайсы того же раздела чуть надёжнее
     search_params: list[SearchParam] = Field(default_factory=list)  # для поиска в интернете: материал, цвет… от оператора
+    type_mark: str = ""  # графа «Тип, марка»: «по типу Polair CM107-S» — эталонная модель для поиска
 
 
 class MatchRequest(BaseModel):
