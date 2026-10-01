@@ -362,7 +362,7 @@ public sealed record PageInfo
     public int Number { get; init; }
     /// <summary>spec | other.</summary>
     public string Kind { get; init; } = "other";
-    /// <summary>text | ocr | skipped.</summary>
+    /// <summary>text | ocr | skipped | xlsx.</summary>
     public string Source { get; init; } = "text";
     public int Rows { get; init; }
     public IReadOnlyList<string> Warnings { get; init; } = [];

@@ -92,7 +92,7 @@ export function WorkspaceView() {
             </Group>
             <Group gap="xs">
               <Badge variant="outline" color="gray">
-                строк из PDF: {stats.items}
+                строк из файла: {stats.items}
               </Badge>
               <Badge variant="outline" color="gray">
                 позиций в КП: {stats.positions}

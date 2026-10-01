@@ -3,21 +3,23 @@ using DomeoSpec.Domain.Specifications;
 
 namespace DomeoSpec.Application.Parsing;
 
-/// <summary>Сценарий «разобрать PDF тома ТХ»: проверка входа и вызов ядра.</summary>
+/// <summary>Сценарий «разобрать том ТХ»: проверка входа и вызов ядра. Принимаем PDF и Excel
+/// (xlsx/xlsm) — файл спецификации от проектировщика может быть и таблицей.</summary>
 public sealed class ParseSpecificationHandler(IParsingEngine engine)
 {
     public const long MaxFileBytes = 100L * 1024 * 1024;
+    private static readonly string[] Supported = [".pdf", ".xlsx", ".xlsm"];
 
-    public async Task<ParsedDocument> HandleAsync(Stream pdf, string fileName, long length, CancellationToken ct)
+    public async Task<ParsedDocument> HandleAsync(Stream file, string fileName, long length, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(fileName) || !fileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
-            throw new ValidationFailedException("Ожидается файл PDF.");
+        if (string.IsNullOrWhiteSpace(fileName) || !Supported.Any(ext => fileName.EndsWith(ext, StringComparison.OrdinalIgnoreCase)))
+            throw new ValidationFailedException("Ожидается файл PDF или Excel (xlsx).");
         if (length <= 0)
             throw new ValidationFailedException("Файл пустой.");
         if (length > MaxFileBytes)
             throw new ValidationFailedException("Файл больше 100 МБ.");
 
-        return await engine.ParseAsync(pdf, fileName, ct);
+        return await engine.ParseAsync(file, fileName, ct);
     }
 }
 

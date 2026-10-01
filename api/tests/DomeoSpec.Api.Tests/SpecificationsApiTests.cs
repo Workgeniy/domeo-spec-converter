@@ -46,7 +46,7 @@ public sealed class SpecificationsApiTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
-    public async Task Parse_rejects_non_pdf_with_problem_details()
+    public async Task Parse_rejects_unsupported_with_problem_details()
     {
         using var form = PdfForm("заметки.txt");
         var response = await _client.PostAsync("/api/specifications/parse", form);
@@ -55,6 +55,14 @@ public sealed class SpecificationsApiTests : IClassFixture<ApiFactory>
         var problem = await response.Content.ReadFromJsonAsync<JsonNode>();
         Assert.Equal("validation_failed", problem!["code"]!.GetValue<string>());
         Assert.Contains("PDF", problem["detail"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task Parse_accepts_xlsx()
+    {
+        using var form = PdfForm("спецификация.xlsx");  // содержимое для подставного ядра неважно — проверяем приём xlsx
+        var response = await _client.PostAsync("/api/specifications/parse", form);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]

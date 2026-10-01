@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .export.excel import build_workbook
 from .models import ExportRequest
-from .parsing.spec_parser import parse_pdf
+from .parsing.document import parse_document as parse_pdf
 
 
 def main(argv: list[str]) -> int:

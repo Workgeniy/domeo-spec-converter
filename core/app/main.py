@@ -37,7 +37,7 @@ from .models import (
     SupplierUpdate,
 )
 from .parsing.ocr import default_provider
-from .parsing.spec_parser import parse_pdf
+from .parsing.document import is_supported, parse_document
 from .pricing.indexation import IndexationStore, history_indexation
 from .pricing.internet import InternetPriceService
 from .pricing.store import PriceListStore
@@ -252,15 +252,15 @@ def parse(file: UploadFile = File(...), file_name: str | None = Form(None)) -> P
     # Имя файла в заголовке multipart у некоторых клиентов (в т. ч. .NET) теряет кириллицу,
     # поэтому настоящее имя можно передать отдельным полем формы.
     name = file_name or file.filename or "документ.pdf"
-    if not name.lower().endswith(".pdf"):
-        raise HTTPException(400, "Ожидается файл PDF")
+    if not is_supported(name):
+        raise HTTPException(400, "Ожидается файл PDF или Excel (xlsx)")
     content = file.file.read()
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "Файл больше 100 МБ")
     try:
-        return parse_pdf(content, file_name=name)
+        return parse_document(content, file_name=name)
     except Exception as exc:  # noqa: BLE001 — любая ошибка разбора отдаётся клиенту текстом
-        raise HTTPException(422, f"Не удалось разобрать PDF: {exc}") from exc
+        raise HTTPException(422, f"Не удалось разобрать файл: {exc}") from exc
 
 
 @app.post("/api/export")

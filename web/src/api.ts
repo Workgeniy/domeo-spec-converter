@@ -142,7 +142,7 @@ export interface SummaryItem {
 export interface PageInfo {
   number: number
   kind: 'spec' | 'other'
-  source: 'text' | 'ocr' | 'skipped'
+  source: 'text' | 'ocr' | 'skipped' | 'xlsx'
   rows: number
   warnings: string[]
 }
@@ -366,7 +366,8 @@ export function getHealth(): Promise<Health> {
   return fetch('/api/specifications/health').then((r) => readData<Health>(r))
 }
 
-export function parsePdf(file: File): Promise<ParsedDocument> {
+/** Разобрать файл тома ТХ: PDF или Excel (xlsx). Ядро определяет формат по расширению. */
+export function parseDocument(file: File): Promise<ParsedDocument> {
   const form = new FormData()
   form.append('file', file)
   return fetch('/api/specifications/parse', { method: 'POST', body: form }).then((r) => readData<ParsedDocument>(r))

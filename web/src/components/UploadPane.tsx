@@ -1,9 +1,13 @@
 import { Alert, Group, List, Progress, Stack, Text, rem } from '@mantine/core'
-import { Dropzone, PDF_MIME_TYPE } from '@mantine/dropzone'
-import { IconFileTypePdf, IconInfoCircle, IconUpload, IconX } from '@tabler/icons-react'
+import { Dropzone, MIME_TYPES, PDF_MIME_TYPE } from '@mantine/dropzone'
+import { IconFileImport, IconInfoCircle, IconUpload, IconX } from '@tabler/icons-react'
 import { useEffect, useState } from 'react'
 
-import { getHealth, parsePdf, type ParsedDocument } from '../api'
+import { getHealth, parseDocument, type ParsedDocument } from '../api'
+
+// Том спецификации принимаем и PDF, и Excel — таблица от проектировщика бывает сразу в xlsx.
+const XLSM_MIME = 'application/vnd.ms-excel.sheet.macroEnabled.12'
+const ACCEPT = [...PDF_MIME_TYPE, MIME_TYPES.xlsx, XLSM_MIME]
 
 interface Props {
   onParsed: (doc: ParsedDocument) => void
@@ -46,7 +50,7 @@ export function UploadPane({ onParsed, compact = false }: Props) {
     for (const [i, file] of files.entries()) {
       setProgress({ done: i, total: files.length, current: file.name })
       try {
-        parsed.push(await parsePdf(file))
+        parsed.push(await parseDocument(file))
       } catch (e) {
         failed.push(`${file.name}: ${e instanceof Error ? e.message : String(e)}`)
       }
@@ -60,7 +64,7 @@ export function UploadPane({ onParsed, compact = false }: Props) {
 
   return (
     <Stack gap="md" maw={compact ? undefined : 820} mx={compact ? undefined : 'auto'} mt={compact ? undefined : 'xl'}>
-      <Dropzone onDrop={handleDrop} accept={PDF_MIME_TYPE} maxSize={100 * 1024 ** 2} multiple loading={busy}>
+      <Dropzone onDrop={handleDrop} accept={ACCEPT} maxSize={100 * 1024 ** 2} multiple loading={busy}>
         <Group justify="center" gap="xl" mih={compact ? 80 : 200} style={{ pointerEvents: 'none' }}>
           <Dropzone.Accept>
             <IconUpload style={{ width: rem(compact ? 32 : 52), height: rem(compact ? 32 : 52) }} stroke={1.5} />
@@ -69,18 +73,18 @@ export function UploadPane({ onParsed, compact = false }: Props) {
             <IconX style={{ width: rem(compact ? 32 : 52), height: rem(compact ? 32 : 52) }} stroke={1.5} />
           </Dropzone.Reject>
           <Dropzone.Idle>
-            <IconFileTypePdf style={{ width: rem(compact ? 32 : 52), height: rem(compact ? 32 : 52) }} stroke={1.5} />
+            <IconFileImport style={{ width: rem(compact ? 32 : 52), height: rem(compact ? 32 : 52) }} stroke={1.5} />
           </Dropzone.Idle>
           <div>
             <Text size={compact ? 'md' : 'xl'} inline>
               {compact
-                ? 'Добавить ещё том этого объекта (PDF)'
-                : 'Перетащите PDF томов «Технологические решения» или нажмите для выбора'}
+                ? 'Добавить ещё том этого объекта (PDF или Excel)'
+                : 'Перетащите тома «Технологические решения» — PDF или Excel — или нажмите для выбора'}
             </Text>
             <Text size="sm" c="dimmed" inline mt={7}>
               {compact
                 ? 'Например, ТХ2 (пищеблок) к уже загруженному ТХ1'
-                : 'Можно несколько файлов сразу — ТХ1 и ТХ2 одного объекта попадут в одну спецификацию. До 100 МБ каждый.'}
+                : 'Можно несколько файлов сразу — ТХ1 и ТХ2 одного объекта попадут в одну спецификацию. PDF или xlsx, до 100 МБ каждый.'}
             </Text>
           </div>
         </Group>
@@ -115,11 +119,12 @@ export function UploadPane({ onParsed, compact = false }: Props) {
       {!compact && (
         <Alert variant="light" color="gray" icon={<IconInfoCircle size={18} />} title="Что делает сервис">
           <List size="sm" spacing={4}>
-            <List.Item>Находит в PDF листы «Спецификация технологического оборудования» и читает таблицу.</List.Item>
+            <List.Item>Находит листы «Спецификация технологического оборудования» и читает таблицу — в PDF или в Excel.</List.Item>
+            <List.Item>Столбцы определяет по словам шапки («Поз.», «Наименование», «Кол-во»…), поэтому их порядок в файле любой.</List.Item>
             <List.Item>Сводит одинаковые позиции из разных помещений и считает общее количество.</List.Item>
             <List.Item>Даёт поправить свод, проставить разделы и цены, исключить лишнее — и выгружает Excel по форме КП.</List.Item>
             <List.Item>
-              Сканы без текстового слоя распознаются через OCR:{' '}
+              Сканы PDF без текстового слоя распознаются через OCR:{' '}
               {ocr === undefined ? '…' : ocr ? `доступен (${ocr})` : 'на сервере не установлен, такие страницы будут пропущены'}
               .
             </List.Item>

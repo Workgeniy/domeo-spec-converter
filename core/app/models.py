@@ -161,7 +161,7 @@ class SourceDocument(BaseModel):
 
 
 PageKind = Literal["spec", "other"]
-PageSource = Literal["text", "ocr", "skipped"]
+PageSource = Literal["text", "ocr", "skipped", "xlsx"]
 
 
 class PageInfo(BaseModel):
