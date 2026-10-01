@@ -23,7 +23,8 @@ from typing import NamedTuple
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
-from ...models import InternetLookup, InternetOffer, Supplier, SupplierIndexInfo, SupplierOffer
+from ...models import InternetLookup, InternetOffer, SearchParam, Supplier, SupplierIndexInfo, SupplierOffer
+from ..attributes import ManualParams, compare_manual, parse_params
 from ..history import analyze_name, normalize_name
 from ..params import Params, compare_params, extract_params
 from ..synonyms import RUSSIAN_WORD, stem
@@ -67,12 +68,14 @@ class Ranked(NamedTuple):
     score: float
     note: str  # пометка о параметрах
     alias: str = ""  # совпало с названием позиции у поставщика из истории закупок, а не с нашим
+    confirmed: bool = False  # у предложения подтверждены все параметры, которые задал оператор
 
 
 class OfferMatcher:
     """Индекс слово → предложения; оценка по словам та же, что у сопоставления с историей,
-    плюс проверка числовых параметров (габариты, объём, масса…) из характеристик позиции и
-    проверка, что это тот же товар, а не соседний с теми же словами."""
+    плюс проверка числовых параметров (габариты, объём, масса…) из характеристик позиции,
+    параметров оператора (материал, цвет…, attributes.py) и проверка, что это тот же товар,
+    а не соседний с теми же словами."""
 
     def __init__(self, offers: list[SupplierOffer] | None = None):
         self.offers: list[SupplierOffer] = []
@@ -102,13 +105,17 @@ class OfferMatcher:
             for t in info.stems:
                 self.index[t].add(i)
 
-    def search(self, name: str, description: str = "", section: str = "", aliases: Iterable[str] = ()) -> list[Ranked]:
+    def search(
+        self, name: str, description: str = "", section: str = "", aliases: Iterable[str] = (), manual: ManualParams | None = None
+    ) -> list[Ranked]:
         """Предложения по убыванию совпадения. Кроме нашего наименования, ищем и по названиям
         позиции у поставщиков из истории закупок (``aliases``) — такое совпадение помечается и
         засчитывается, только если у предложения есть хоть одно общее слово с нашим
         наименованием или оно начинается с марки: «Стол, цвет белый» по названию «Стол-мойка
-        медицинский» — не «Тумба с мойкой»."""
-        spec = extract_params(f"{name} {description}")
+        медицинский» — не «Тумба с мойкой». ``manual`` — параметры оператора: числовые
+        сверяются вместе с характеристиками, текстовые — по названию предложения."""
+        manual = manual if manual is not None and manual.checkable() else None
+        spec = extract_params(f"{name} {description} {manual.numeric_text if manual else ''}")
         section_key = section.strip().lower()
         own_loose = analyze_name(name).loose
         best: dict[int, Ranked] = {}
@@ -121,21 +128,28 @@ class OfferMatcher:
             for i in set().union(*(self.index.get(t, ()) for t in query)):
                 if alias and not own_loose & self.offer_loose[i] and self.offer_heads[i]:
                     continue  # по чужому названию — только то, что хоть словом похоже на наше (или марка с моделью)
-                ranked = self._rank(i, info.key, query, (first, info.head_word), spec, section_key, alias)
+                ranked = self._rank(i, info.key, query, (first, info.head_word), spec, manual, section_key, alias)
                 if ranked is not None and (i not in best or ranked.score > best[i].score):
                     best[i] = ranked
         # При равном совпадении вперёд идут предложения с подтверждёнными параметрами, потом без указанных.
         order = {NOTE_PARAMS_MATCH: 0, NOTE_PARAMS_PARTIAL: 1, "": 2, NOTE_PARAMS_UNKNOWN: 2, NOTE_PARAMS_CONFLICT: 3}
-        return sorted(best.values(), key=lambda r: (-r.score, order[r.note], r.offer.price))
+        return sorted(best.values(), key=lambda r: (-r.score, not r.confirmed, order[r.note], r.offer.price))
 
-    def _rank(self, i: int, key: str, query: set[str], head: tuple[str, str], spec: Params, section_key: str, alias: str) -> Ranked | None:
+    def _rank(
+        self, i: int, key: str, query: set[str], head: tuple[str, str], spec: Params, manual: ManualParams | None, section_key: str, alias: str
+    ) -> Ranked | None:
         score, common = self._score(key, query, i)
         offer = self.offers[i]
         if section_key and offer.section and offer.section.strip().lower() == section_key:
             score = min(1.0, round(score + SECTION_BONUS, 3))  # прайс того же раздела — чуть надёжнее
         note = ""
-        if not spec.empty():
-            matches, conflicts, missing = compare_params(spec, self.offer_params[i])
+        confirmed = False
+        if not spec.empty() or manual is not None:
+            matches, conflicts, missing = compare_params(spec, self.offer_params[i]) if not spec.empty() else (0, 0, 0)
+            if manual is not None:
+                verdict = compare_manual(manual, self.offer_keys[i], self.offer_loose[i], self.offer_params[i])
+                matches, conflicts, missing = matches + verdict.matches, conflicts + verdict.conflicts, missing + verdict.missing
+                confirmed = verdict.confirmed
             if conflicts:
                 # Другой размер/объём — это не та же позиция: не выше «похожего», в цену не входит.
                 score = min(round(score * PARAM_CONFLICT_FACTOR, 3), MATCH_THRESHOLD - 0.01)
@@ -148,7 +162,7 @@ class OfferMatcher:
                 note = NOTE_PARAMS_UNKNOWN
         if score >= MATCH_THRESHOLD and not self._same_item(query, head, common, i):
             score = round(MATCH_THRESHOLD - 0.01, 3)  # слова похожи, товар другой — в цену не входит
-        return Ranked(offer, score, note, alias) if score >= ANALOG_THRESHOLD else None
+        return Ranked(offer, score, note, alias, confirmed) if score >= ANALOG_THRESHOLD else None
 
     def _score(self, key: str, query: set[str], i: int) -> tuple[float, int]:
         """Оценка по словам и число общих слов."""
@@ -554,73 +568,91 @@ class SupplierIndex:
             total = sum(len(o) for o in self.offers.values())
             return f"каталоги поставщиков: {total} позиций у {len(self.suppliers)} поставщиков"
 
-    def rank(self, name: str, description: str = "", section: str = "", aliases: Iterable[str] = ()) -> list[Ranked]:
+    def rank(
+        self, name: str, description: str = "", section: str = "", aliases: Iterable[str] = (), params: Iterable[SearchParam] = ()
+    ) -> list[Ranked]:
         """Предложения индекса по убыванию совпадения (не ниже порога «похоже»); параметры из
-        характеристик подтверждают или отводят совпадение, прайс того же раздела — небольшой плюс.
-        ``aliases`` — названия позиции у поставщиков из истории закупок: подключаются, когда по
-        нашему названию меньше ``min_shops`` магазинов."""
+        характеристик и заданные оператором (``params``) подтверждают или отводят совпадение,
+        прайс того же раздела — небольшой плюс. ``aliases`` — названия позиции у поставщиков из
+        истории закупок: подключаются, когда по нашему названию меньше ``min_shops`` магазинов."""
+        manual = parse_params(params)
         with self._lock:
-            ranked = self._matcher.search(name, description, section)
-            if aliases and self.matched_shops(ranked) < self.min_shops:
+            ranked = self._matcher.search(name, description, section, manual=manual)
+            if aliases and self.matched_shops(ranked, manual.checkable()) < self.min_shops:
                 # По нашему названию рынка не хватает — добавляем найденное по названиям из истории.
-                ranked = self._matcher.search(name, description, section, aliases)
+                ranked = self._matcher.search(name, description, section, aliases, manual)
             return ranked
 
     @staticmethod
-    def matched_shops(ranked: list[Ranked]) -> int:
-        """Сколько разных магазинов дали ту же позицию (совпадение не ниже MATCH_THRESHOLD)."""
-        return len({r.offer.supplier_id for r in ranked if r.score >= MATCH_THRESHOLD})
+    def matched_shops(ranked: list[Ranked], confirmed_only: bool = False) -> int:
+        """Сколько разных магазинов дали ту же позицию (совпадение не ниже MATCH_THRESHOLD);
+        ``confirmed_only`` — только с подтверждёнными параметрами оператора."""
+        return len({r.offer.supplier_id for r in ranked if r.score >= MATCH_THRESHOLD and (r.confirmed or not confirmed_only)})
 
-    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "", aliases: Iterable[str] = ()) -> InternetLookup:
-        return self.build_lookup(self.rank(name, description, section, aliases), name, description, today)
+    def lookup(
+        self, name: str, description: str, unit: str, today: str, section: str = "", aliases: Iterable[str] = (), params: Iterable[SearchParam] = ()
+    ) -> InternetLookup:
+        params = list(params)
+        return self.build_lookup(self.rank(name, description, section, aliases, params), name, description, today, params)
 
-    def build_lookup(self, ranked: list[Ranked], name: str, description: str, today: str) -> InternetLookup:
+    def build_lookup(self, ranked: list[Ranked], name: str, description: str, today: str, params: Iterable[SearchParam] = ()) -> InternetLookup:
+        """Ответ по ранжированным предложениям. Рекомендуемая цена — медиана по совпавшим; если
+        оператор задал параметры и у части предложений они подтверждены — медиана по ним."""
         query = re.sub(r"\s+", " ", f"{name} {description}".strip())[:300]
         spec = extract_params(f"{name} {description}")
         params_text = f"параметры {spec.describe(counts=True)}" if not spec.empty() else ""
+        manual = parse_params(params)
+        manual_text = f"параметры оператора: {manual.describe()}" if not manual.empty() else ""
         if not ranked:
-            return InternetLookup(status="not_found", query=query, looked_up_at=today, provider="suppliers", comment="в каталогах поставщиков похожих позиций нет")
-        shown = ranked[:OFFERS_SHOWN]
+            comment = "; ".join(p for p in (manual_text, "в каталогах поставщиков похожих позиций нет") if p)
+            return InternetLookup(status="not_found", query=query, looked_up_at=today, provider="suppliers", comment=comment)
         offers = [
             InternetOffer(
-                title=offer.name,
-                url=offer.url,
-                shop=offer.supplier,
-                price=offer.price,
-                analog=score < MATCH_THRESHOLD,
+                title=r.offer.name,
+                url=r.offer.url,
+                shop=r.offer.supplier,
+                price=r.offer.price,
+                analog=r.score < MATCH_THRESHOLD,
                 note=", ".join(
                     part
                     for part in (
-                        f"совпадение {round(score * 100)}%",
-                        f"по названию из истории закупок «{alias[:60]}»" if alias else "",
-                        note,
-                        f"раздел «{offer.section}»" if offer.section else "",
-                        f"арт. {offer.sku}" if offer.sku else "",
-                        f"цена от {offer.collected_at}" if offer.collected_at else "",
+                        f"совпадение {round(r.score * 100)}%",
+                        f"по названию из истории закупок «{r.alias[:60]}»" if r.alias else "",
+                        r.note,
+                        f"раздел «{r.offer.section}»" if r.offer.section else "",
+                        f"арт. {r.offer.sku}" if r.offer.sku else "",
+                        f"цена от {r.offer.collected_at}" if r.offer.collected_at else "",
                     )
                     if part
                 ),
             )
-            for offer, score, note, alias in shown
+            for r in ranked[:OFFERS_SHOWN]
         ]
         confident = [r for r in ranked if r.score >= MATCH_THRESHOLD]
-        matched = [r.offer.price for r in confident]
-        if matched:
-            price = float(statistics.median(matched))
-            suppliers = len({r.offer.supplier for r in confident})
-            low, high = (f"{value:,.0f}".replace(",", " ") for value in (min(matched), max(matched)))
-            comment = f"совпадений {len(matched)} у {suppliers} поставщ., от {low} до {high} ₽; взята медиана"
-            if params_text and all(r.note == NOTE_PARAMS_UNKNOWN for r in confident):
+        confirmed = [r for r in confident if r.confirmed]
+        basis = confirmed or confident
+        if basis:
+            prices = [r.offer.price for r in basis]
+            price = float(statistics.median(prices))
+            suppliers = len({r.offer.supplier for r in basis})
+            low, high = (f"{value:,.0f}".replace(",", " ") for value in (min(prices), max(prices)))
+            comment = f"совпадений {len(prices)} у {suppliers} поставщ., от {low} до {high} ₽; взята медиана"
+            if confirmed:
+                comment = f"с заданными параметрами {comment}"
+                if len(confirmed) < len(confident):
+                    comment += f"; ещё {len(confident) - len(confirmed)} без подтверждения параметров в цену не вошли"
+            elif manual.checkable():
+                comment += "; заданные параметры в предложениях не подтверждены — проверьте"
+            elif params_text and all(r.note == NOTE_PARAMS_UNKNOWN for r in confident):
                 comment += "; в предложениях параметры не указаны — проверьте размер"
             elif params_text and not any(r.note == NOTE_PARAMS_MATCH for r in confident):
                 comment += "; в предложениях указаны не все параметры — проверьте размер"
         else:
             price = None
             comment = "точных совпадений нет, показаны похожие позиции — цену выбирает оператор"
-            if params_text and any(r.note == NOTE_PARAMS_CONFLICT for r in ranked):
+            if (params_text or manual.checkable()) and any(r.note == NOTE_PARAMS_CONFLICT for r in ranked):
                 comment = "по словам похоже, но параметры другие — цену выбирает оператор"
-        if params_text:
-            comment = f"{params_text}; {comment}"
+        comment = "; ".join(p for p in (manual_text, params_text, comment) if p)
         return InternetLookup(status="found", query=query, looked_up_at=today, offers=offers, price=price, comment=comment, provider="suppliers")
 
 

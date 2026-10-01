@@ -158,6 +158,9 @@ public sealed class SetIndexationHandler(IPricingEngine engine)
 public sealed class LookupInternetHandler(IPricingEngine engine)
 {
     public const int MaxItems = 50;
+    public const int MaxParams = 10;
+    public const int MaxParamName = 60;
+    public const int MaxParamValue = 120;
 
     public async Task<IReadOnlyDictionary<string, InternetLookup>> HandleAsync(IReadOnlyList<MatchRequestItem> items, bool refresh, CancellationToken ct)
     {
@@ -167,6 +170,10 @@ public sealed class LookupInternetHandler(IPricingEngine engine)
             throw new ValidationFailedException($"За один запрос ищем не больше {MaxItems} позиций.");
         if (items.Any(i => string.IsNullOrWhiteSpace(i.Id) || string.IsNullOrWhiteSpace(i.Name)))
             throw new ValidationFailedException("У каждой позиции должны быть id и наименование.");
+        if (items.Any(i => i.SearchParams.Count > MaxParams))
+            throw new ValidationFailedException($"У позиции не больше {MaxParams} параметров поиска.");
+        if (items.SelectMany(i => i.SearchParams).Any(p => p.Name.Length > MaxParamName || p.Value.Length > MaxParamValue))
+            throw new ValidationFailedException($"Параметр поиска: название — до {MaxParamName} символов, значение — до {MaxParamValue}.");
         return await engine.LookupInternetAsync(items, refresh, ct);
     }
 }

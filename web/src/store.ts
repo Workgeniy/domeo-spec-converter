@@ -218,9 +218,26 @@ export const useWorkspace = create<WorkspaceState>()(
     }),
     {
       name: 'domeo-spec-workspace',
-      version: 7,
+      version: 8,
       migrate: (persisted, version) => {
         let state = persisted as Partial<WorkspaceState>
+        if (version < 8 && state.documents) {
+          // v8: у строк свода появились параметры поиска от оператора, у результата поиска — с какими искали.
+          state = {
+            ...state,
+            documents: state.documents.map((d) => ({
+              ...d,
+              doc: {
+                ...d.doc,
+                summary: d.doc.summary.map((row) => ({
+                  ...row,
+                  search_params: row.search_params ?? [],
+                  internet: row.internet ? { ...row.internet, params: row.internet.params ?? [] } : (row.internet ?? null),
+                })),
+              },
+            })),
+          }
+        }
         if (version < 7) {
           state = { ...state, indexation: state.indexation ?? DEFAULT_INDEXATION }
         }

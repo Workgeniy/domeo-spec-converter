@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
 from app.main import app, internet_prices, supplier_index
+from app.models import SearchParam
 from app.pricing.internet import SupplierIndexProvider
 from app.pricing.suppliers.crawler import CrawlResult, SiteCrawler, normalize_site
 from app.pricing.suppliers.extract import Extracted, extract_offers, looks_like_listing, parse_price, parse_sitemap, parse_yml, product_name
@@ -276,6 +277,45 @@ def test_same_item_rules(tmp_path: Path) -> None:
     # Предложение без единого общего слова с нашим названием по чужому названию не засчитывается.
     sink = index.lookup("Тумба медицинская с двойной мойкой", "", "шт.", "2026-09-29", aliases=["Стол-мойка медицинский, цвет белый"])
     assert sink.status == "not_found"
+
+
+def test_operator_params_pick_offers_and_price(tmp_path: Path) -> None:
+    index = SupplierIndex(data_dir=tmp_path)
+    shop = index.add("Мебель-Опт", "mebel-opt.test")
+    other = index.add("Столы-Стулья", "stoly.test")
+    index.set_offers(
+        shop.id,
+        [
+            Extracted(name="Стол обеденный, столешница ЛДСП, ножки металл", price=9000),
+            Extracted(name="Стол обеденный на металлических ножках", price=11000),
+            Extracted(name="Стол обеденный деревянный", price=7000),
+        ],
+        "карта сайта",
+    )
+    index.set_offers(other.id, [Extracted(name="Стол обеденный Masey", price=8000)], "карта сайта")
+    # Без параметров — медиана по всем четырём.
+    assert index.lookup("Стол обеденный", "", "шт.", "2026-10-01").price == 8500
+    # Ножки металл: подтверждено у двух — цена по ним; деревянный и Masey в цену не вошли.
+    legs = [SearchParam(name="Материал ножек", value="металл")]
+    lookup = index.lookup("Стол обеденный", "", "шт.", "2026-10-01", params=legs)
+    assert lookup.price == 10000 and lookup.comment.startswith("параметры оператора: материал ножек — металл; с заданными параметрами совпадений 2")
+    assert "ещё 2 без подтверждения" in lookup.comment
+    # Подтвердившие — первыми (при равном совпадении — дешёвые раньше).
+    assert [o.title for o in lookup.offers[:2]] == ["Стол обеденный, столешница ЛДСП, ножки металл", "Стол обеденный на металлических ножках"]
+    # Материал целиком: деревянный стол — противоречие, уходит в «похожие».
+    metal = index.lookup("Стол обеденный", "", "шт.", "2026-10-01", params=[SearchParam(name="Материал", value="металл")])
+    by_title = {o.title: o for o in metal.offers}
+    assert by_title["Стол обеденный деревянный"].analog and "параметры не совпали" in by_title["Стол обеденный деревянный"].note
+    # Магазины для порога автопоиска: с параметрами считаются только подтвердившие.
+    ranked = index.rank("Стол обеденный", params=legs)
+    assert index.matched_shops(ranked) == 2 and index.matched_shops(ranked, confirmed_only=True) == 1
+    # Нигде не подтверждено — цена по всем совпавшим, с просьбой проверить.
+    grey = index.lookup("Стол обеденный", "", "шт.", "2026-10-01", params=[SearchParam(name="Цвет", value="серый")])
+    assert grey.price == 8500 and "заданные параметры в предложениях не подтверждены — проверьте" in grey.comment
+    # Числовой параметр оператора сверяется как размеры из характеристик.
+    index.set_offers(other.id, [Extracted(name="Стол обеденный 1200х800", price=12000), Extracted(name="Стол обеденный 1600х900", price=15000)], "карта сайта")
+    sized = index.lookup("Стол обеденный", "", "шт.", "2026-10-01", params=[SearchParam(name="Размер", value="1200х800 мм")])
+    assert sized.price == 12000 and not {o.title: o for o in sized.offers}["Стол обеденный 1200х800"].analog
 
 
 def test_supplier_endpoints_and_lookup(tmp_path: Path) -> None:

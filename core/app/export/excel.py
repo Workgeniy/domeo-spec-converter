@@ -18,6 +18,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from ..models import ExportRequest, KpSettings, SourceDocument, SpecItem, SummaryItem
+from ..pricing.attributes import parse_params
 from ..pricing.indexation import indexation_factor, rate_for, years_between
 from .kp import format_date, price_row, round_half_up
 
@@ -334,6 +335,9 @@ def _fill_internet_sheet(ws: Worksheet, rows: list[tuple[int, SummaryItem]]) -> 
         lookup = item.internet
         if not lookup:
             continue
+        searched = parse_params(lookup.params or item.search_params)
+        if not searched.empty():
+            put([number, item.pos, item.name, lookup.looked_up_at, "", f"Параметры поиска: {searched.describe()}", None, "", "", ""], dim=True)
         if not lookup.offers:
             note = lookup.comment if lookup.status == "not_found" else f"ошибка: {lookup.comment}"
             put([number, item.pos, item.name, lookup.looked_up_at, "", "не найдено" if lookup.status == "not_found" else "не удалось найти", None, "", "", note], dim=True)

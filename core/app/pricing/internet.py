@@ -13,13 +13,15 @@ import json
 import os
 import re
 import threading
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Protocol
 from zoneinfo import ZoneInfo
 
-from ..models import InternetLookup, InternetOffer, InternetSearchInfo, MatchRequestItem
+from ..models import InternetLookup, InternetOffer, InternetSearchInfo, MatchRequestItem, SearchParam
+from .attributes import clean_params, params_key, parse_params
 from .history import normalize_name
 
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / ".data"
@@ -37,6 +39,7 @@ SYSTEM_PROMPT = """Ты помощник отдела закупок компа�
 
 Правила:
 - Подходят предложения того же типа товара с теми же ключевыми характеристиками (назначение, размеры, материал, комплектность). Если точно такого нет — можно привести похожие, пометив их как аналог и указав, чем отличаются.
+- Если оператор задал параметры (материал, цвет, производитель…), они обязательны: предложение с другим значением — только аналог с пометкой, чем отличается; рекомендуемая цена — по предложениям, где параметры совпадают.
 - Цена — в рублях, с НДС, за одну единицу измерения из спецификации (за штуку, за комплект). Цены за другую единицу и явно устаревшие не бери.
 - Годятся сайты производителей, магазинов и маркетплейсов, где цена видна на странице.
 - Рекомендуемая цена — типичная среди подходящих предложений, а не самая низкая с сомнительной страницы. Если нашлись только аналоги — рекомендуй по ним и скажи об этом в комментарии.
@@ -52,7 +55,7 @@ class PriceSearchProvider(Protocol):
     name: str
     model: str
 
-    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "") -> InternetLookup: ...
+    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "", params: Sequence[SearchParam] = ()) -> InternetLookup: ...
 
 
 def today_moscow() -> str:
@@ -154,12 +157,14 @@ class ClaudeWebSearchProvider:
         self.effort = effort
         self.max_searches = max_searches
 
-    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "") -> InternetLookup:
+    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "", params: Sequence[SearchParam] = ()) -> InternetLookup:
         query = build_query(name, description)
+        manual = parse_params(params)
         prompt = (
             f"Позиция спецификации: {name.strip()}\n"
             f"Характеристики: {description.strip()[:DESCRIPTION_LIMIT] or '—'}\n"
-            f"Единица измерения: {unit.strip() or 'шт.'}\n"
+            + (f"Параметры, которые задал оператор (обязательны): {manual.describe()}\n" if not manual.empty() else "")
+            + f"Единица измерения: {unit.strip() or 'шт.'}\n"
             f"Сегодня: {today}.\n"
             "Найди актуальные предложения российских продавцов и верни JSON по схеме."
         )
@@ -213,7 +218,7 @@ class FakePriceProvider:
     name = "fake"
     model = "тестовые данные"
 
-    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "") -> InternetLookup:
+    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "", params: Sequence[SearchParam] = ()) -> InternetLookup:
         import hashlib
 
         seed = int(hashlib.md5(normalize_name(name).encode("utf-8")).hexdigest()[:6], 16)  # noqa: S324 — не криптография
@@ -261,9 +266,9 @@ class SupplierIndexProvider:
     def model(self) -> str:
         return self.index.description
 
-    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "") -> InternetLookup:
+    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "", params: Sequence[SearchParam] = ()) -> InternetLookup:
         aliases = _market_names(self.market_names, name, description)
-        return self.index.lookup(name, description, unit, today, section, aliases)
+        return self.index.lookup(name, description, unit, today, section, aliases, params)
 
 
 class AutoSearchProvider:
@@ -290,29 +295,32 @@ class AutoSearchProvider:
         engine = f"автопоиск через {self.web.engine.name}, пока меньше {self.index.min_shops} магазинов" if self.web is not None else "автопоиск выключен"
         return f"{self.index.description}; {engine}"
 
-    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "") -> InternetLookup:
+    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "", params: Sequence[SearchParam] = ()) -> InternetLookup:
         aliases = _market_names(self.market_names, name, description)
-        ranked = self.index.rank(name, description, section, aliases)
-        base = self.index.build_lookup(ranked, name, description, today)
+        # Задал оператор параметры — считаем только магазины, где они подтверждены: иначе три
+        # магазина с «тем же столом» из другого материала остановили бы поиск в интернете.
+        strict = parse_params(params).checkable()
+        ranked = self.index.rank(name, description, section, aliases, params)
+        base = self.index.build_lookup(ranked, name, description, today, params)
         base.provider = self.name
-        shops_before = self.index.matched_shops(ranked)
+        shops_before = self.index.matched_shops(ranked, strict)
         if self.web is None or shops_before >= self.index.min_shops:
             return base  # магазинов по позиции уже достаточно — интернет не нужен
         try:
-            self.web.find(name, description, unit, today)  # найденное само ложится в индекс
+            self.web.find(name, description, unit, today, params)  # найденное само ложится в индекс
         except Exception as exc:  # noqa: BLE001 — сбой поисковика не должен ронять пачку
             base.comment = f"{base.comment}; автопоиск не ответил: {str(exc)[:120]}".strip("; ")
             return base
-        ranked = self.index.rank(name, description, section, aliases)
-        if aliases and self.index.matched_shops(ranked) < self.index.min_shops:
+        ranked = self.index.rank(name, description, section, aliases, params)
+        if aliases and self.index.matched_shops(ranked, strict) < self.index.min_shops:
             try:
                 self.web.find(aliases[0], "", unit, today)  # то, что покупали раньше, — своими словами поставщика
-                ranked = self.index.rank(name, description, section, aliases)
+                ranked = self.index.rank(name, description, section, aliases, params)
             except Exception:  # noqa: BLE001 — второй запрос необязательный: хватит того, что уже нашлось
                 pass
-        result = self.index.build_lookup(ranked, name, description, today)
+        result = self.index.build_lookup(ranked, name, description, today, params)
         result.provider = self.name
-        if self.index.matched_shops(ranked) <= shops_before:
+        if self.index.matched_shops(ranked, strict) <= shops_before:
             result.comment = f"{result.comment}; автопоиск в интернете новых магазинов не нашёл".strip("; ")
         return result
 
@@ -395,14 +403,17 @@ class InternetPriceService:
             tmp.replace(self.path)
 
     @staticmethod
-    def cache_key(name: str, description: str) -> str:
-        return f"{normalize_name(name)}|{normalize_name(description)[:300]}"
+    def cache_key(name: str, description: str, params: Sequence[SearchParam] = ()) -> str:
+        """Наименование и характеристики; с параметрами оператора — и они (без них ключ прежний)."""
+        key = f"{normalize_name(name)}|{normalize_name(description)[:300]}"
+        extra = params_key(params)
+        return f"{key}|{extra}" if extra else key
 
-    def cached(self, name: str, description: str, today: str | None = None) -> InternetLookup | None:
+    def cached(self, name: str, description: str, today: str | None = None, params: Sequence[SearchParam] = ()) -> InternetLookup | None:
         """Свежая запись из кэша (не старше ttl_days) или None."""
         today = today or today_moscow()
         with self._lock:
-            entry = self._cache.get(self.cache_key(name, description))
+            entry = self._cache.get(self.cache_key(name, description, params))
         if entry is None or not entry.looked_up_at:
             return None
         # Найденное другим провайдером (заглушкой до появления ключа) не годится.
@@ -422,8 +433,8 @@ class InternetPriceService:
         pending: dict[str, MatchRequestItem] = {}
         waiting: dict[str, list[str]] = {}
         for item in items:
-            key = self.cache_key(item.name, item.description)
-            cached = None if refresh or not use_cache else self.cached(item.name, item.description, today)
+            key = self.cache_key(item.name, item.description, item.search_params)
+            cached = None if refresh or not use_cache else self.cached(item.name, item.description, today, item.search_params)
             if cached is not None:
                 result[item.id] = cached
                 continue
@@ -446,13 +457,16 @@ class InternetPriceService:
 
     def _lookup_one(self, item: MatchRequestItem, today: str) -> InternetLookup:
         assert self.provider is not None
+        params = clean_params(item.search_params)
         try:
-            return self.provider.lookup(item.name, item.description, item.unit or "", today, item.section or "")
+            lookup = self.provider.lookup(item.name, item.description, item.unit or "", today, item.section or "", params)
         except Exception as exc:  # noqa: BLE001 — одна неудача не должна валить всю пачку
-            return InternetLookup(
+            lookup = InternetLookup(
                 status="error",
                 query=build_query(item.name, item.description),
                 looked_up_at=today,
                 comment=str(exc)[:300],
                 provider=self.provider.name,
             )
+        lookup.params = params  # с какими параметрами искали — интерфейс увидит, что их потом поменяли
+        return lookup

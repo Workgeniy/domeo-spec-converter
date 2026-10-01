@@ -13,6 +13,7 @@ import os
 import re
 import threading
 import time
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date
@@ -23,6 +24,8 @@ from urllib.parse import urlsplit
 import httpx
 from bs4 import BeautifulSoup
 
+from ...models import SearchParam
+from ..attributes import parse_params
 from ..params import extract_params
 from ..websearch import SearchEngine, SearchHit
 from .crawler import USER_AGENT
@@ -51,12 +54,13 @@ class DiscoveredPage:
     offers: list[Extracted] = field(default_factory=list)
 
 
-def build_query(name: str, description: str = "") -> str:
+def build_query(name: str, description: str = "", extra: str = "") -> str:
     """«Стеллаж с перфорированными полками» + характеристики «…2000х1000х400(h)» →
-    «Стеллаж с перфорированными полками 2000x1000x400 купить»; без параметров — просто название."""
+    «Стеллаж с перфорированными полками 2000x1000x400 купить»; без параметров — просто название.
+    ``extra`` — слова из параметров оператора («ножки металл»), идут сразу за названием."""
     text = re.sub(r"\s+", " ", name).strip()
     params = extract_params(description).describe()
-    return " ".join(part for part in (text, params, "купить") if part)[:200]
+    return " ".join(part for part in (text, " ".join(extra.split()), params, "купить") if part)[:200]
 
 
 def host_of(url: str) -> str:
@@ -154,13 +158,19 @@ class WebPriceSearch:
 
     # ---------- поиск ----------
 
-    def find(self, name: str, description: str, unit: str, today: str) -> list[DiscoveredPage]:
+    def find(self, name: str, description: str, unit: str, today: str, params: Iterable[SearchParam] = ()) -> list[DiscoveredPage]:
         """Страницы магазинов с предложениями по позиции; найденное сразу уходит в индекс.
-        Сначала запрос с параметрами из характеристик, если по нему цен нет — без них."""
-        queries = [build_query(name, description)]
-        plain = build_query(name)
-        if plain != queries[0]:
-            queries.append(plain)
+        Сначала запрос с параметрами оператора и из характеристик, если по нему цен нет — только
+        с параметрами оператора, потом просто название (подходящее отберёт сверка в индексе)."""
+        manual = parse_params(params)
+        queries: list[str] = []
+        for query in (
+            build_query(name, f"{description} {manual.numeric_text}", manual.query()),
+            build_query(name, manual.numeric_text, manual.query()),
+            build_query(name),
+        ):
+            if query not in queries:
+                queries.append(query)
         pages: list[DiscoveredPage] = []
         for query in queries:
             pages = self._search(query, today)

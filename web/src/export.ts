@@ -10,10 +10,11 @@ function toSummaryItem(row: SummaryRow): SummaryItem {
     installation: item.installation ?? true,
     price_source: item.price_source ?? '',
     history: item.history ?? null,
-    internet: item.internet ?? null,
+    internet: item.internet ? { ...item.internet, params: item.internet.params ?? [] } : null,
     internet_price: item.internet_price ?? null,
     internet_source: item.internet_source ?? '',
     internet_date: item.internet_date ?? '',
+    search_params: item.search_params ?? [],
   }
 }
 

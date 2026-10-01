@@ -1,18 +1,60 @@
-import { Anchor, Badge, Button, Group, HoverCard, NumberInput, ScrollArea, Table, Text, Tooltip } from '@mantine/core'
+import { Anchor, Badge, Button, Group, HoverCard, Loader, NumberInput, ScrollArea, Table, Text, Tooltip } from '@mantine/core'
 import { memo } from 'react'
 
 import type { HistoryPrice, InternetOffer, MatchKind, PriceSource } from '../api'
 import type { HistoryChoice, RowKey, SummaryRow as Row } from '../store'
 import { formatMoney, formatQty } from './format'
+import { paramLabel, sameParams } from './SearchParamsModal'
 
 interface Props {
   number: number
   row: Row
   rowKey: RowKey
+  /** Идёт поиск цены по этой позиции (после правки параметров). */
+  searching: boolean
   onChange: (key: RowKey, patch: Partial<Row>) => void
   onChoose: (keys: RowKey[], which: HistoryChoice) => void
   onChooseInternet: (keys: RowKey[]) => void
   onOffer: (key: RowKey, offer: InternetOffer) => void
+  onEditParams: (key: RowKey) => void
+}
+
+/** Раздел и параметры поиска цены у позиции: значки, ссылка на правку и пометка, если цену искали с другими. */
+function SearchParamsLine({ row, searching, onEdit }: { row: Row; searching: boolean; onEdit: () => void }) {
+  const params = row.search_params ?? []
+  const stale = !searching && row.internet != null && !sameParams(params, row.internet.params ?? [])
+  return (
+    <Group gap={4} mt={2} wrap="wrap">
+      {row.section && (
+        <Text size="xs" c="dimmed" mr={4}>
+          {row.section}
+        </Text>
+      )}
+      {params.map((p, i) => (
+        <Badge key={i} size="xs" variant="light" color="grape" tt="none" style={{ cursor: 'pointer' }} onClick={onEdit} title="Изменить параметры поиска">
+          {paramLabel(p)}
+        </Badge>
+      ))}
+      <Anchor component="button" type="button" size="xs" c={params.length > 0 ? undefined : 'dimmed'} onClick={onEdit}>
+        {params.length > 0 ? 'изменить' : '+ параметры поиска'}
+      </Anchor>
+      {searching && (
+        <Group gap={4} wrap="nowrap">
+          <Loader size={10} />
+          <Text size="xs" c="dimmed">
+            ищем цену…
+          </Text>
+        </Group>
+      )}
+      {stale && (
+        <Tooltip label="Цену из интернета искали с другими параметрами — найдите заново (кнопка поиска цен или «Сохранить и найти»)" multiline w={300}>
+          <Text size="xs" c="orange">
+            параметры изменены
+          </Text>
+        </Tooltip>
+      )}
+    </Group>
+  )
 }
 
 const KIND_LABEL: Record<MatchKind, { label: string; color: string }> = {
@@ -225,7 +267,7 @@ function InternetCell({ row, active, onChoose, onOffer }: { row: Row; active: bo
   )
 }
 
-export const CostRowView = memo(function CostRowView({ number, row, rowKey, onChange, onChoose, onChooseInternet, onOffer }: Props) {
+export const CostRowView = memo(function CostRowView({ number, row, rowKey, searching, onChange, onChoose, onChooseInternet, onOffer, onEditParams }: Props) {
   const best = row.history?.best ?? null
   const source = row.price_source ?? ''
   const total = row.price === null || row.qty === null ? null : row.price * row.qty
@@ -247,11 +289,7 @@ export const CostRowView = memo(function CostRowView({ number, row, rowKey, onCh
         <Text size="sm" lineClamp={2} title={row.description}>
           {row.name}
         </Text>
-        {row.section && (
-          <Text size="xs" c="dimmed">
-            {row.section}
-          </Text>
-        )}
+        <SearchParamsLine row={row} searching={searching} onEdit={() => onEditParams(rowKey)} />
       </Table.Td>
       <Table.Td>
         <Text size="sm" ta="right">

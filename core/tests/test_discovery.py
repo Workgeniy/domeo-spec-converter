@@ -7,6 +7,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from app.main import app, internet_prices, supplier_index
+from app.models import SearchParam
 from app.pricing.internet import AutoSearchProvider
 from app.pricing.suppliers.crawler import CrawlResult
 from app.pricing.suppliers.discovery import WebPriceSearch, build_query, is_shop_candidate, site_name_of
@@ -168,6 +169,27 @@ def test_auto_provider_searches_web_until_enough_shops(tmp_path: Path) -> None:
 
     broken = AutoSearchProvider(index, WebPriceSearch(BrokenEngine(), index, data_dir=tmp_path, client=_client([]), page_delay=0))
     assert "не ответил" in broken.lookup("Ножничный подъёмник", "", "шт.", "2026-09-25").comment
+
+
+def test_auto_provider_uses_operator_params(tmp_path: Path) -> None:
+    index = SupplierIndex(data_dir=tmp_path)
+    index.set_settings(autocrawl_pages=0, min_shops=1)
+    engine = FakeEngine()
+    provider = AutoSearchProvider(index, WebPriceSearch(engine, index, data_dir=tmp_path, client=_client([]), page_delay=0))
+    beech = [SearchParam(name="Материал", value="бук")]
+    # Параметр оператора — в запросе поисковику; цена — по предложению, где он подтверждён.
+    lookup = provider.lookup("Стул детский регулируемый по высоте №1-№3", "", "шт.", "2026-10-01", params=beech)
+    assert engine.queries == ["Стул детский регулируемый по высоте №1-№3 бук купить"]
+    assert lookup.price == 1490 and "с заданными параметрами совпадений 1" in lookup.comment
+    # Подтвердивший магазин уже есть (порог 1) — в интернет больше не идём.
+    provider.lookup("Стул детский регулируемый по высоте №1-№3", "", "шт.", "2026-10-01", params=beech)
+    assert len(engine.queries) == 1
+    # Металл не подтверждён нигде: магазины «с тем же стулом» не в счёт — поиск идёт, цена по всем с пометкой.
+    metal = provider.lookup("Стул детский регулируемый по высоте №1-№3", "", "шт.", "2026-10-01", params=[SearchParam(name="Каркас", value="металл")])
+    assert engine.queries[1] == "Стул детский регулируемый по высоте №1-№3 каркас металл купить"
+    assert metal.price == 1420 and "не подтверждены" in metal.comment and "новых магазинов не нашёл" in metal.comment
+    # Без параметров — как раньше, по названию.
+    assert build_query("Стул детский", "", "") == "Стул детский купить"
 
 
 BOILER = """<html><head><title>Кипятильник Atesy Фонтан АКНЭ-100 — ПроКухня</title>

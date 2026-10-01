@@ -10,7 +10,7 @@ from openpyxl import load_workbook
 
 from app.export.excel import build_workbook
 from app.main import app, internet_prices
-from app.models import ExportRequest, InternetLookup, InternetOffer, MatchRequestItem, SummaryItem
+from app.models import ExportRequest, InternetLookup, InternetOffer, MatchRequestItem, SearchParam, SummaryItem
 from app.pricing.internet import InternetPriceService, extract_json, parse_lookup, today_moscow
 
 client = TestClient(app)
@@ -25,7 +25,7 @@ class FakeProvider:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "") -> InternetLookup:
+    def lookup(self, name: str, description: str, unit: str, today: str, section: str = "", params=()) -> InternetLookup:
         self.calls.append(name)
         if "нет" in name.lower():
             return InternetLookup(status="not_found", query=name, looked_up_at=today, provider=self.name, comment="ничего похожего")
@@ -103,6 +103,30 @@ def test_service_caches_dedupes_and_does_not_cache_errors(tmp_path: Path) -> Non
     assert other.cached("Стул детский", "регулируемый") is None  # найденное другим провайдером (заглушкой) не годится
 
 
+def test_service_passes_operator_params_and_keys_cache_by_them(tmp_path: Path) -> None:
+    class Recording(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.params: list[list[tuple[str, str]]] = []
+
+        def lookup(self, name: str, description: str, unit: str, today: str, section: str = "", params=()) -> InternetLookup:
+            self.params.append([(p.name, p.value) for p in params])
+            return super().lookup(name, description, unit, today, section, params)
+
+    provider = Recording()
+    service = InternetPriceService(provider, data_dir=tmp_path)
+    legs = [SearchParam(name="Материал ножек", value="металл"), SearchParam(name="Цвет", value=" ")]  # пустое — отброшено
+    plain = service.lookup_many([MatchRequestItem(id="a", name="Стол обеденный")])["a"]
+    with_params = service.lookup_many([MatchRequestItem(id="b", name="Стол обеденный", search_params=legs)])["b"]
+    assert plain.params == [] and [(p.name, p.value) for p in with_params.params] == [("Материал ножек", "металл")]
+    assert provider.params == [[], [("Материал ножек", "металл")]]  # другие параметры — другой поиск, не из кэша
+    # Те же параметры в другом регистре — из кэша; без параметров — прежняя запись.
+    same = [SearchParam(name="материал ножек", value="Металл")]
+    assert service.lookup_many([MatchRequestItem(id="c", name="Стол обеденный", search_params=same)])["c"].params == with_params.params
+    assert service.lookup_many([MatchRequestItem(id="d", name="Стол обеденный")])["d"].params == []
+    assert len(provider.params) == 2
+
+
 def test_internet_endpoints(tmp_path: Path) -> None:
     saved = (internet_prices.provider, internet_prices.data_dir, internet_prices.path)
     internet_prices.provider = None
@@ -123,7 +147,10 @@ def test_internet_endpoints(tmp_path: Path) -> None:
         lookups = response.json()["lookups"]
         assert lookups["d1:0"]["status"] == "found" and lookups["d1:0"]["offers"][0]["url"] == "https://shop.example/1"
         assert lookups["d1:1"]["status"] == "not_found"
+        assert lookups["d1:0"]["params"] == []
         assert json.loads((tmp_path / "internet_prices.json").read_text(encoding="utf-8"))["lookups"]
+        with_params = {"items": [{"id": "d1:2", "name": "Стол обеденный", "search_params": [{"name": "Материал", "value": "металл"}]}]}
+        assert client.post("/api/internet/lookup", json=with_params).json()["lookups"]["d1:2"]["params"] == [{"name": "Материал", "value": "металл"}]
     finally:
         internet_prices.provider, internet_prices.data_dir, internet_prices.path = saved
         internet_prices._cache.clear()
@@ -151,6 +178,14 @@ def test_cost_export_writes_internet_offers_sheet() -> None:
         summary=[
             SummaryItem(pos="2.10", name="Стул детский", unit="шт.", qty=10, price=1200, price_source="internet", internet=lookup, internet_price=1200, internet_source="https://shop.example/1", internet_date="2026-09-25"),
             SummaryItem(pos="2.11", name="Нет такого", unit="шт.", qty=1, internet=InternetLookup(status="not_found", looked_up_at="2026-09-25", comment="ничего")),
+            SummaryItem(
+                pos="2.12",
+                name="Стол обеденный",
+                unit="шт.",
+                qty=1,
+                search_params=[SearchParam(name="Материал ножек", value="металл")],
+                internet=lookup.model_copy(update={"params": [SearchParam(name="Материал ножек", value="металл")]}),
+            ),
         ],
     )
     wb = build_workbook(data)
@@ -161,6 +196,8 @@ def test_cost_export_writes_internet_offers_sheet() -> None:
     offers = wb["Предложения из интернета"]
     assert (offers["F2"].value, offers["G2"].value, offers["I2"].hyperlink.target) == ("Стул детский — точный", 1200, "https://shop.example/1")
     assert offers["H3"].value == "да" and offers["F4"].value == "не найдено"
+    # С какими параметрами оператора искали — строкой перед предложениями позиции.
+    assert offers["F5"].value == "Параметры поиска: материал ножек — металл" and offers["C5"].value == "Стол обеденный"
     buffer = io.BytesIO()
     wb.save(buffer)
     load_workbook(io.BytesIO(buffer.getvalue()))

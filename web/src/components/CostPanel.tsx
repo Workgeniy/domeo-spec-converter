@@ -1,7 +1,7 @@
 import { Alert, Anchor, Badge, Button, FileButton, Group, Menu, Pagination, Paper, Progress, SegmentedControl, Stack, Table, Text, TextInput } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { IconChevronDown, IconDatabaseImport, IconFileDownload, IconRefresh, IconWorldSearch } from '@tabler/icons-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   getInternetSearch,
@@ -12,13 +12,16 @@ import {
   type HistoryPrice,
   type InternetSearchInfo,
   type MatchKind,
+  type MatchRequestItem,
   type PriceListInfo,
+  type SearchParam,
 } from '../api'
-import { useWorkspace, type HistoryChoice, type RowKey, type SummaryRow } from '../store'
+import { rowKey as keyOf, useWorkspace, type HistoryChoice, type RowKey, type SummaryRow } from '../store'
 import { useUi } from '../ui'
 import { CostRowView } from './CostRow'
 import { formatMoney } from './format'
 import { IndexationPanel } from './IndexationPanel'
+import { sameParams, SearchParamsModal } from './SearchParamsModal'
 import { TableScroller } from './TableScroller'
 
 interface Props {
@@ -41,6 +44,15 @@ interface FlatRow {
   row: SummaryRow
 }
 
+function lookupItem(id: string, row: SummaryRow, params: SearchParam[] = row.search_params ?? []): MatchRequestItem {
+  return { id, name: row.name, description: row.description, unit: row.unit, section: row.section, search_params: params }
+}
+
+/** Цену ещё не искали, поиск упал или параметры оператора поменяли после поиска. */
+function needsLookup(row: SummaryRow): boolean {
+  return !row.internet || row.internet.status === 'error' || !sameParams(row.search_params ?? [], row.internet.params ?? [])
+}
+
 export function CostPanel({ onDownload, downloading }: Props) {
   const documents = useWorkspace((s) => s.documents)
   const updateRow = useWorkspace((s) => s.updateRow)
@@ -60,6 +72,10 @@ export function CostPanel({ onDownload, downloading }: Props) {
   const [filter, setFilter] = useState('')
   const [mode, setMode] = useState<Mode>('all')
   const [page, setPage] = useState(1)
+  // Окно параметров поиска по позиции и позиции, по которым идёт поиск после правки параметров.
+  const [editing, setEditing] = useState<RowKey | null>(null)
+  const [searchingIds, setSearchingIds] = useState<ReadonlySet<string>>(() => new Set())
+  const editParams = useCallback((key: RowKey) => setEditing(key), [])
 
   useEffect(() => {
     getPriceList()
@@ -149,7 +165,7 @@ export function CostPanel({ onDownload, downloading }: Props) {
     }
   }
 
-  const missingInternet = rows.filter((r) => !r.row.internet || r.row.internet.status === 'error')
+  const missingInternet = rows.filter((r) => needsLookup(r.row))
 
   async function searchInternet(scope: 'missing' | 'all') {
     const targets = scope === 'all' ? rows : missingInternet
@@ -170,7 +186,7 @@ export function CostPanel({ onDownload, downloading }: Props) {
         }
         const batch = targets.slice(i, i + batchSize)
         const lookups = await lookupInternet(
-          batch.map((r) => ({ id: r.id, name: r.row.name, description: r.row.description, unit: r.row.unit, section: r.row.section })),
+          batch.map((r) => lookupItem(r.id, r.row)),
           scope === 'all',
         )
         applyInternet(lookups)
@@ -189,6 +205,41 @@ export function CostPanel({ onDownload, downloading }: Props) {
       getInternetSearch()
         .then(setInternet)
         .catch(() => undefined)
+    }
+  }
+
+  const editingRow = editing ? (rows.find((r) => r.id === keyOf(editing)) ?? null) : null
+
+  /** Сохранить параметры поиска позиции; search — сразу найти цену с ними (параллельно с общим поиском). */
+  async function saveParams(params: SearchParam[], search: boolean) {
+    const target = editingRow
+    setEditing(null)
+    if (!target) return
+    updateRow(target.key, { search_params: params })
+    if (!search) return
+    setSearchingIds((ids) => new Set(ids).add(target.id))
+    try {
+      const lookups = await lookupInternet([lookupItem(target.id, target.row, params)], true)
+      applyInternet(lookups)
+      const found = lookups[target.id]
+      notifications.show({
+        color: found?.status === 'found' ? 'green' : found?.status === 'error' ? 'red' : 'yellow',
+        title: target.row.name,
+        message:
+          found?.status === 'found'
+            ? found.price !== null
+              ? `Цена с рынка: ${formatMoney(found.price)} ₽`
+              : 'Нашлись только похожие предложения — цену выберите сами'
+            : found?.comment || 'Подходящих предложений не нашлось',
+      })
+    } catch (e) {
+      notifications.show({ color: 'red', title: 'Поиск цены не удался', message: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setSearchingIds((ids) => {
+        const next = new Set(ids)
+        next.delete(target.id)
+        return next
+      })
     }
   }
 
@@ -433,10 +484,12 @@ export function CostPanel({ onDownload, downloading }: Props) {
                 number={(currentPage - 1) * PAGE_SIZE + i + 1}
                 row={r.row}
                 rowKey={r.key}
+                searching={searchingIds.has(r.id)}
                 onChange={updateRow}
                 onChoose={chooseHistoryPrice}
                 onChooseInternet={chooseInternetPrice}
                 onOffer={chooseOffer}
+                onEditParams={editParams}
               />
             ))}
             {pageRows.length === 0 && (
@@ -451,6 +504,15 @@ export function CostPanel({ onDownload, downloading }: Props) {
           </Table.Tbody>
         </Table>
       </TableScroller>
+      <SearchParamsModal
+        rowId={editingRow?.id ?? null}
+        name={editingRow?.row.name ?? ''}
+        description={editingRow?.row.description ?? ''}
+        params={editingRow?.row.search_params ?? []}
+        canSearch={internet?.configured === true}
+        onClose={() => setEditing(null)}
+        onSave={(params, search) => void saveParams(params, search)}
+      />
     </Stack>
   )
 }

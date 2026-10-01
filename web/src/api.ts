@@ -81,6 +81,12 @@ export interface InternetOffer {
 export type InternetStatus = 'found' | 'not_found' | 'error'
 
 /** Результат поиска цены в интернете на дату. */
+/** Параметр поиска цены, который задал оператор: «Материал ножек: металл», «Цвет: серый». */
+export interface SearchParam {
+  name: string
+  value: string
+}
+
 export interface InternetLookup {
   status: InternetStatus
   query: string
@@ -93,6 +99,8 @@ export interface InternetLookup {
   provider: string
   /** Сколько поисковых запросов ушло — для оценки расходов. */
   searches: number
+  /** С какими параметрами оператора искали. */
+  params: SearchParam[]
 }
 
 /** Откуда взята базовая цена позиции. */
@@ -121,6 +129,8 @@ export interface SummaryItem {
   /** Ссылка на выбранное предложение. */
   internet_source: string
   internet_date: string
+  /** Параметры поиска цены от оператора: материал, цвет… */
+  search_params: SearchParam[]
   /** Подлежит монтажу/пусконаладке → лист «1» (Приложение №1.1), иначе инвентарь → лист «2». */
   installation: boolean
   source_doc: string
@@ -209,6 +219,8 @@ export interface MatchRequestItem {
   unit?: string
   /** Раздел КП: прайсы того же раздела чуть надёжнее. */
   section?: string
+  /** Для поиска в интернете: параметры оператора (материал, цвет…). */
+  search_params?: SearchParam[]
 }
 
 /** Состояние поиска цен в интернете: настроен ли, чем ищем (claude | suppliers | fake), сколько в кэше. */

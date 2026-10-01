@@ -74,7 +74,7 @@ public sealed class FakePricing : IPricingEngine
         var offer = new InternetOffer { Title = "Стул детский регулируемый", Url = "https://shop.example/1", Shop = "Магазин", Price = 1250 };
         IReadOnlyDictionary<string, InternetLookup> result = items.ToDictionary(
             i => i.Id,
-            i => new InternetLookup { Status = "found", Query = i.Name, LookedUpAt = "2026-09-25", Offers = [offer], Price = 1250, Provider = "fake", Searches = 2 });
+            i => new InternetLookup { Status = "found", Query = i.Name, LookedUpAt = "2026-09-25", Offers = [offer], Price = 1250, Provider = "fake", Searches = 2, Params = i.SearchParams });
         return Task.FromResult(result);
     }
 

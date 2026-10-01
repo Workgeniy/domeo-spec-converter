@@ -45,6 +45,37 @@ public sealed class InternetApiTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Lookup_passes_operator_params_to_the_engine()
+    {
+        var response = await _client.PostAsJsonAsync("/api/specifications/internet/lookup", new
+        {
+            items = new object[]
+            {
+                new { id = "d1:0", name = "Стол обеденный", search_params = new[] { new { name = "Материал ножек", value = "металл" } } },
+                new { id = "d1:1", name = "Стул" },
+            },
+        });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var sent = _factory.Pricing.LastLookedUp!;
+        Assert.Equal("Материал ножек", Assert.Single(sent[0].SearchParams).Name);
+        Assert.Equal("металл", sent[0].SearchParams[0].Value);
+        Assert.Empty(sent[1].SearchParams); // не передали — пустой список
+        var lookups = (await response.Content.ReadFromJsonAsync<JsonNode>())!["data"]!["lookups"]!;
+        Assert.Equal("металл", lookups["d1:0"]!["params"]![0]!["value"]!.GetValue<string>());
+
+        var tooMany = await _client.PostAsJsonAsync("/api/specifications/internet/lookup", new
+        {
+            items = new[] { new { id = "a", name = "Стол", search_params = Enumerable.Range(0, 11).Select(i => new { name = $"п{i}", value = "x" }).ToArray() } },
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, tooMany.StatusCode);
+        var tooLong = await _client.PostAsJsonAsync("/api/specifications/internet/lookup", new
+        {
+            items = new[] { new { id = "a", name = "Стол", search_params = new[] { new { name = "Материал", value = new string('м', 121) } } } },
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, tooLong.StatusCode);
+    }
+
+    [Fact]
     public async Task Lookup_validates_input()
     {
         var empty = await _client.PostAsJsonAsync("/api/specifications/internet/lookup", new { items = Array.Empty<object>() });

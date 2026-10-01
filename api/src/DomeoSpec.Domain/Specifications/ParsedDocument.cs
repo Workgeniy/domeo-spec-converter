@@ -81,6 +81,13 @@ public sealed record InternetOffer
     public string Note { get; init; } = "";
 }
 
+/// <summary>Параметр поиска цены, который задал оператор: «Материал ножек: металл», «Цвет: серый».</summary>
+public sealed record SearchParam
+{
+    public string Name { get; init; } = "";
+    public string Value { get; init; } = "";
+}
+
 /// <summary>Результат поиска цены в интернете на дату.</summary>
 public sealed record InternetLookup
 {
@@ -95,6 +102,8 @@ public sealed record InternetLookup
     public string Comment { get; init; } = "";
     public string Provider { get; init; } = "";
     public int Searches { get; init; }
+    /// <summary>С какими параметрами оператора искали.</summary>
+    public IReadOnlyList<SearchParam> Params { get; init; } = [];
 }
 
 /// <summary>Сводка по загруженному прайсу закупки.</summary>
@@ -111,7 +120,11 @@ public sealed record PriceListInfo
     public string? PeriodTo { get; init; }
 }
 
-public sealed record MatchRequestItem(string Id, string Name, string Description = "", string Unit = "", string Section = "");
+public sealed record MatchRequestItem(string Id, string Name, string Description = "", string Unit = "", string Section = "")
+{
+    /// <summary>Для поиска в интернете: параметры оператора (материал, цвет…).</summary>
+    public IReadOnlyList<SearchParam> SearchParams { get; init; } = [];
+}
 
 /// <summary>Изменение цен одних и тех же позиций между двумя годами.</summary>
 public sealed record IndexationPair
@@ -326,6 +339,8 @@ public sealed record SummaryItem
     public double? InternetPrice { get; init; }
     public string InternetSource { get; init; } = "";
     public string InternetDate { get; init; } = "";
+    /// <summary>Параметры поиска цены от оператора: материал, цвет…</summary>
+    public IReadOnlyList<SearchParam> SearchParams { get; init; } = [];
     /// <summary>Подлежит монтажу/пусконаладке → лист «1» (Приложение №1.1), иначе инвентарь → лист «2».</summary>
     public bool Installation { get; init; } = true;
     public string SourceDoc { get; init; } = "";

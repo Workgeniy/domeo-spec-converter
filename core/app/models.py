@@ -89,6 +89,13 @@ class InternetOffer(BaseModel):
 InternetStatus = Literal["found", "not_found", "error"]
 
 
+class SearchParam(BaseModel):
+    """Параметр поиска цены, который задал оператор: «Материал ножек: металл», «Цвет: серый»."""
+
+    name: str = ""
+    value: str = ""
+
+
 class InternetLookup(BaseModel):
     """Результат поиска цены в интернете на дату."""
 
@@ -100,6 +107,7 @@ class InternetLookup(BaseModel):
     comment: str = ""
     provider: str = ""
     searches: int = 0  # сколько поисковых запросов ушло (для оценки расходов)
+    params: list[SearchParam] = Field(default_factory=list)  # с какими параметрами оператора искали
 
 
 # Откуда взята базовая цена позиции: выбор оператора.
@@ -126,6 +134,7 @@ class SummaryItem(BaseModel):
     internet_price: float | None = None  # цена из интернета на дату — выбранное предложение
     internet_source: str = ""  # ссылка на предложение
     internet_date: str = ""
+    search_params: list[SearchParam] = Field(default_factory=list)  # параметры поиска цены от оператора: материал, цвет…
     # Подлежит монтажу/пусконаладке → лист «1» (Приложение №1.1, с графами СМР);
     # иначе инвентарь → лист «2» (Приложение №1.2).
     installation: bool = True
@@ -259,6 +268,7 @@ class MatchRequestItem(BaseModel):
     description: str = ""
     unit: str = ""  # для поиска в интернете: цена нужна за эту единицу
     section: str = ""  # раздел КП: прайсы того же раздела чуть надёжнее
+    search_params: list[SearchParam] = Field(default_factory=list)  # для поиска в интернете: материал, цвет… от оператора
 
 
 class MatchRequest(BaseModel):
