@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 
 from ..models import GroupQty, SpecItem, SummaryItem
 
@@ -44,14 +45,22 @@ def build_summary(items: list[SpecItem]) -> list[SummaryItem]:
 
 
 def _flag_duplicate_positions(summary: list[SummaryItem]) -> None:
-    seen: dict[str, int] = {}
+    """Один и тот же номер позиции с разными описаниями — возможная опечатка, но только если это
+    в одном помещении (или помещений в документе нет вовсе — плоский список). Когда номера
+    повторяются в разных помещениях, это обычная нумерация по помещениям (в каждом свои 1, 2,
+    3…), а не ошибка."""
+    by_pos: dict[str, list[SummaryItem]] = defaultdict(list)
     for s in summary:
-        if not s.pos_key:
+        if s.pos_key and not s.pos_key.startswith("б"):
+            by_pos[s.pos_key].append(s)
+    for items in by_pos.values():
+        if len(items) < 2:
             continue
-        seen[s.pos_key] = seen.get(s.pos_key, 0) + 1
-    for s in summary:
-        if s.pos_key and seen[s.pos_key] > 1 and not s.pos_key.startswith("б"):
-            s.warnings.append("одна позиция с разными описаниями — проверить, не опечатка ли в PDF")
+        rooms = [frozenset(g.group for g in s.groups if g.group) for s in items]
+        same_room = any(rooms[i] & rooms[j] for i in range(len(rooms)) for j in range(i + 1, len(rooms)))
+        if same_room or not any(rooms):
+            for s in items:
+                s.warnings.append("тот же номер позиции с другим описанием — проверьте, не опечатка ли")
 
 
 def _section_for(item: SpecItem) -> str:

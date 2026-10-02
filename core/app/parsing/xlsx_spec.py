@@ -31,8 +31,13 @@ COLUMN_HINTS: list[tuple[str, tuple[str, ...]]] = [
     ("note", ("примеч", "коммент")),
     ("type_mark", ("тип", "марка", "артикул", "модель")),
     ("doc", ("обознач",)),
-    ("group", ("раздел", "помещ")),
-    ("name", ("наимен", "название", "оборудован", "характеристик")),
+    ("razdel", ("раздел",)),  # раздел КП («Мебель», «Спортивное оборудование»)
+    ("group", ("помещ",)),  # помещение («Групповая комната…»)
+    ("name", ("наимен", "название", "оборудован", "описан", "номенклат")),
+    # Характеристики отдельным столбцом («Технические характеристики») — в описание позиции.
+    # Ищется после «name», чтобы совмещённый столбец «Наименование и тех. характеристика»
+    # достался наименованию, а не характеристикам.
+    ("specs", ("техническ", "тех. хар", "характеристик", "параметр")),
 ]
 REQUIRED = ("name", "qty")  # без них лист не считаем спецификацией
 HEADER_SCAN_ROWS = 60
@@ -147,6 +152,7 @@ def parse_xlsx(source: str | Path | bytes, file_name: str | None = None) -> Pars
     wb = load_workbook(handle, read_only=False, data_only=True)
     result = ParsedDocument(file_name=name)
     items: list[SpecItem] = []
+    razdel_by_id: dict[int, str] = {}  # id позиции → раздел КП из столбца «Раздел»
     pre_header_text: list[str] = []
 
     for ws in wb.worksheets:
@@ -156,8 +162,9 @@ def parse_xlsx(source: str | Path | bytes, file_name: str | None = None) -> Pars
             continue
         header_row, mapping = found
         pre_header_text += [_text(v) for row in grid[:header_row] for v in row if _text(v)]
-        sheet_items = _rows_to_items(grid, filled, header_row + 1, mapping, len(items))
+        sheet_items, sheet_sections = _rows_to_items(grid, filled, header_row + 1, mapping, len(items))
         items.extend(sheet_items)
+        razdel_by_id.update(sheet_sections)
         result.pages.append(PageInfo(number=len(result.pages) + 1, kind="spec", source="xlsx", rows=len(sheet_items)))
 
     wb.close()
@@ -166,7 +173,9 @@ def parse_xlsx(source: str | Path | bytes, file_name: str | None = None) -> Pars
     _fill_metadata(result, pre_header_text, name)
     default_section = _default_section(result.spec_title)
     for summary in result.summary:
-        summary.section = summary.section or default_section
+        # Явный столбец «Раздел» (если был) — это раздел КП; иначе раздел из заголовка/по умолчанию.
+        razdel = next((razdel_by_id[i] for i in summary.item_ids if razdel_by_id.get(i)), "")
+        summary.section = razdel or summary.section or default_section
         summary.source_doc = result.doc_code
     for item in items:
         item.source_doc = result.doc_code
@@ -176,28 +185,39 @@ def parse_xlsx(source: str | Path | bytes, file_name: str | None = None) -> Pars
     return result
 
 
-def _rows_to_items(grid: list[list[object]], filled: set[tuple[int, int]], start: int, mapping: dict[str, int], next_id: int) -> list[SpecItem]:
+def _rows_to_items(
+    grid: list[list[object]], filled: set[tuple[int, int]], start: int, mapping: dict[str, int], next_id: int
+) -> tuple[list[SpecItem], dict[int, str]]:
     """Позиция начинается со строки с собственным (не унаследованным из объединения) номером
-    или количеством. Строка только с наименованием — либо характеристика (подклеивается к
-    описанию текущей позиции), либо заголовок раздела/помещения."""
+    или количеством. Характеристики берутся из столбца «Технические характеристики» (если он
+    есть) и/или из строк-продолжений. Возвращает позиции и {id позиции → раздел из столбца
+    «Раздел»} — его в своде используют как раздел КП."""
     items: list[SpecItem] = []
-    group = ""
+    sections: dict[int, str] = {}
+    group = ""  # помещение из строки-заголовка (когда помещение не отдельным столбцом)
     current: SpecItem | None = None
     for r in range(start, len(grid)):
         row = grid[r]
         name = _cell(row, mapping, "name")
-        section = _cell(row, mapping, "group")
+        room = _cell(row, mapping, "group")  # столбец «Помещение», если он есть
+        razdel = _cell(row, mapping, "razdel")  # столбец «Раздел», если он есть
         own_pos = _own(grid, filled, r, mapping, "pos")
         own_qty = _own(grid, filled, r, mapping, "qty")
         if own_pos or own_qty:  # собственный номер/количество — это новая позиция
             pos = own_pos
             qty_raw = own_qty or _cell(row, mapping, "qty")  # количество может быть общим на группу (объединение)
+            specs = _cell(row, mapping, "specs")
+            # Строка с одним номером и пустыми наименованием/ед./кол — зарезервированный номер
+            # (в перечнях нумерация с пропусками), а не позиция.
+            if not name and not specs and not _cell(row, mapping, "type_mark") and not _cell(row, mapping, "unit") and parse_qty(qty_raw) is None:
+                current = None
+                continue
             current = SpecItem(
                 id=next_id + len(items) + 1,
                 page=1,
                 pos=pos,
                 pos_key=normalize_pos(pos),
-                description=name,
+                description=f"{name} {specs}".strip(),  # наименование + характеристики из своего столбца
                 name=short_name(name),
                 type_mark=_cell(row, mapping, "type_mark") or _cell(row, mapping, "doc"),
                 code=_cell(row, mapping, "code"),
@@ -206,7 +226,7 @@ def _rows_to_items(grid: list[list[object]], filled: set[tuple[int, int]], start
                 qty_raw=qty_raw,
                 mass=_cell(row, mapping, "mass"),
                 note=_cell(row, mapping, "note"),
-                group=section or group,
+                group=room or group,
             )
             current.qty = parse_qty(qty_raw)
             if current.qty is None:
@@ -220,24 +240,26 @@ def _rows_to_items(grid: list[list[object]], filled: set[tuple[int, int]], start
             if not current.unit:
                 current.warnings.append("нет единицы измерения")
             items.append(current)
+            if razdel:
+                sections[current.id] = razdel
             continue
-        if not name and not section:
+        if not name and not room:
             continue
         in_item_merge = (r, mapping["pos"]) in filled or (r, mapping["qty"]) in filled or (mapping.get("unit") is not None and (r, mapping["unit"]) in filled)
-        if current is not None and not section and (in_item_merge or not _looks_like_section(name)):
+        if current is not None and not room and (in_item_merge or not _looks_like_section(name)):
             # Строка внутри вертикального объединения позиции — её характеристика (продолжение
             # описания); то же для непокрытой строки, если она не похожа на заголовок помещения.
             current.description = f"{current.description} {name}".strip()
             extra_mfr = _cell(row, mapping, "manufacturer")
             if extra_mfr and extra_mfr.lower() not in current.manufacturer.lower():
                 current.manufacturer = f"{current.manufacturer} {extra_mfr}".strip()
-        elif section or _looks_like_section(name):
-            group, current = (section or name), None  # заголовок раздела или помещения
+        elif room or _looks_like_section(name):
+            group, current = (room or name), None  # заголовок помещения
         else:
             # Оторванная строка без текущей позиции и не похожая на помещение (незамеченная
-            # характеристика, хвост заголовка) — раздел ею не портим.
+            # характеристика, хвост заголовка) — помещение ею не портим.
             current = None
-    return items
+    return items, sections
 
 
 def _fill_metadata(result: ParsedDocument, texts: list[str], file_name: str) -> None:
