@@ -17,22 +17,13 @@ from openpyxl import load_workbook
 
 from ..models import PageInfo, ParsedDocument, SpecItem
 from .aggregate import build_summary
-from .spec_parser import (
-    DOC_CODE_RE,
-    NO_POS_RE,
-    POS_RE,
-    TITLE_RE,
-    _default_section,
-    normalize_pos,
-    parse_qty,
-    short_name,
-)
+from .spec_parser import DOC_CODE_RE, TITLE_RE, _default_section, normalize_pos, parse_qty, short_name
 
 # Ключ столбца -> слова-приметы в заголовке (подстрока, в нижнем регистре). Порядок проверки
 # важен: «Наименование помещения» — это раздел, а не наименование, поэтому раздел ищем раньше.
 COLUMN_HINTS: list[tuple[str, tuple[str, ...]]] = [
     ("pos", ("поз", "№")),
-    ("qty", ("кол-во", "колво", "кол.", "колич", "кол ")),
+    ("qty", ("кол", "кол-во", "колво", "колич")),  # «Кол», «Кол-во», «Количество»
     ("unit", ("ед.", "ед ", "единиц", "ед-ц")),
     ("mass", ("масса", "вес")),
     ("code", ("код",)),
@@ -52,19 +43,25 @@ def _text(value: object) -> str:
     return " ".join(str(value).split()) if value is not None else ""
 
 
-def _expand_merges(ws) -> list[list[object]]:
-    """Значения листа с развёрнутыми объединениями: значение левого верхнего угла — во все
-    ячейки области (вертикальные объединения количества, горизонтальные заголовки разделов)."""
+def _expand_merges(ws) -> tuple[list[list[object]], set[tuple[int, int]]]:
+    """Значения листа с развёрнутыми объединениями (значение левого верхнего угла — во все
+    ячейки области) и множество ячеек, заполненных этим разворотом. Разворот нужен, чтобы
+    прочитать общее значение (одна цена на группу), а множество — чтобы отличить собственное
+    значение строки от унаследованного: у этой спецификации «Ед.»/«Кол» объединены по
+    вертикали на строку товара и строки его характеристик — значит, это одна позиция, а не
+    несколько."""
     grid: list[list[object]] = [list(row) for row in ws.iter_rows(values_only=True)]
+    filled: set[tuple[int, int]] = set()
     for rng in ws.merged_cells.ranges:
         top = grid[rng.min_row - 1][rng.min_col - 1] if rng.min_row - 1 < len(grid) else None
         if top is None:
             continue
         for r in range(rng.min_row - 1, min(rng.max_row, len(grid))):
             for c in range(rng.min_col - 1, rng.max_col):
-                if c < len(grid[r]):
+                if c < len(grid[r]) and (r, c) != (rng.min_row - 1, rng.min_col - 1):
                     grid[r][c] = top
-    return grid
+                    filled.add((r, c))
+    return grid, filled
 
 
 def _match_header(cells: list[str]) -> dict[str, int] | None:
@@ -100,6 +97,44 @@ def _cell(row: list[object], mapping: dict[str, int], key: str) -> str:
     return _text(row[i]) if i is not None and i < len(row) else ""
 
 
+def _own(grid: list[list[object]], filled: set[tuple[int, int]], r: int, mapping: dict[str, int], key: str) -> str:
+    """Собственное значение ячейки строки — пусто, если оно унаследовано из объединения сверху."""
+    i = mapping.get(key)
+    if i is None or i >= len(grid[r]) or (r, i) in filled:
+        return ""
+    return _text(grid[r][i])
+
+
+# Заголовок раздела/помещения (а не характеристика товара). Строки «только наименование»
+# бывают двух видов: продолжение описания товара («Габаритные размеры…», «Электропитание…») и
+# заголовок помещения/раздела. Надёжный признак продолжения — вертикальное объединение
+# столбцов поз./кол./ед. на строку товара и его характеристик (см. _rows_to_items). Из
+# непокрытых объединением разделом считаем только похожее на помещение/раздел, остальное —
+# продолжение описания (чтобы не плодить мусорные разделы из незамеченных характеристик).
+SECTION = re.compile(
+    r"(?:^|\s|\()(?:раздел|участок|пом\.|помещен|этаж|подвал|цокол|антресол|кровл|чердак|прачечн|постирочн|гладильн"
+    r"|кладов|групп|раздевальн|туалетн|буфетн|спальн|игров|при[её]мн|коридор|тамбур|вестибюл|холл"
+    r"|лестнич|кухн|моечн|разделочн|заготовочн|овощн|мясн|рыбн|мучн|горячий цех|холодный цех|цех\b"
+    r"|кабинет|зал\b|комнат|санузел|умывальн|душев|постов\b|медицин|изолятор|процедурн"
+    r"|прививочн|пищеблок|серверн|кастелянск|бельев|сушильн|венткамер|электрощитов|насосн|склад"
+    r"|мастерск|методическ|музыкальн|физкультурн|спортивн|логопед|психолог|бассейн|веранд|терас"
+    r"|лаборатор|ресепшн|ординатор|вентиляцион|тепловой узел|итп\b|уборочн)",
+    re.I,
+)
+
+
+# Нормальный номер позиции в Excel-спецификации: целое («1», «28»), десятичное («7.197»),
+# код оборудования («М10.1», «ВК-1», «П101»), «б/н». Шире, чем у PDF: там номера единообразны
+# в пределах тома, а в разных разделах Excel нумерация бывает и целой, и буквенно-цифровой.
+POS_OK = re.compile(r"^(?:\d{1,4}(?:[.,/\-]\d{1,4})*[а-яa-z]?|[А-ЯA-Zа-яa-z]{1,5}[.\-]?\d{1,4}(?:[.,/\-]\d{1,4})*[а-яa-z]?|б[/\\][нп])$", re.I)
+
+
+def _looks_like_section(text: str) -> bool:
+    # Только у начала строки: помещение/раздел начинается с такого слова («Первый этаж»,
+    # «Пом. 120 …», «Групповая …»), а у характеристики ключевое слово попадалось бы в середине.
+    return bool(SECTION.search(text[:32]))
+
+
 def parse_xlsx(source: str | Path | bytes, file_name: str | None = None) -> ParsedDocument:
     if isinstance(source, (bytes, bytearray)):
         name = file_name or "спецификация.xlsx"
@@ -115,13 +150,13 @@ def parse_xlsx(source: str | Path | bytes, file_name: str | None = None) -> Pars
     pre_header_text: list[str] = []
 
     for ws in wb.worksheets:
-        grid = _expand_merges(ws)
+        grid, filled = _expand_merges(ws)
         found = _find_header(grid)
         if found is None:
             continue
         header_row, mapping = found
         pre_header_text += [_text(v) for row in grid[:header_row] for v in row if _text(v)]
-        sheet_items = _rows_to_items(grid[header_row + 1 :], mapping, len(items))
+        sheet_items = _rows_to_items(grid, filled, header_row + 1, mapping, len(items))
         items.extend(sheet_items)
         result.pages.append(PageInfo(number=len(result.pages) + 1, kind="spec", source="xlsx", rows=len(sheet_items)))
 
@@ -141,51 +176,67 @@ def parse_xlsx(source: str | Path | bytes, file_name: str | None = None) -> Pars
     return result
 
 
-def _rows_to_items(rows: list[list[object]], mapping: dict[str, int], next_id: int) -> list[SpecItem]:
+def _rows_to_items(grid: list[list[object]], filled: set[tuple[int, int]], start: int, mapping: dict[str, int], next_id: int) -> list[SpecItem]:
+    """Позиция начинается со строки с собственным (не унаследованным из объединения) номером
+    или количеством. Строка только с наименованием — либо характеристика (подклеивается к
+    описанию текущей позиции), либо заголовок раздела/помещения."""
     items: list[SpecItem] = []
     group = ""
-    for row in rows:
-        pos = _cell(row, mapping, "pos")
+    current: SpecItem | None = None
+    for r in range(start, len(grid)):
+        row = grid[r]
         name = _cell(row, mapping, "name")
-        unit = _cell(row, mapping, "unit")
-        qty_raw = _cell(row, mapping, "qty")
         section = _cell(row, mapping, "group")
-        if not name and not pos and not section:
+        own_pos = _own(grid, filled, r, mapping, "pos")
+        own_qty = _own(grid, filled, r, mapping, "qty")
+        if own_pos or own_qty:  # собственный номер/количество — это новая позиция
+            pos = own_pos
+            qty_raw = own_qty or _cell(row, mapping, "qty")  # количество может быть общим на группу (объединение)
+            current = SpecItem(
+                id=next_id + len(items) + 1,
+                page=1,
+                pos=pos,
+                pos_key=normalize_pos(pos),
+                description=name,
+                name=short_name(name),
+                type_mark=_cell(row, mapping, "type_mark") or _cell(row, mapping, "doc"),
+                code=_cell(row, mapping, "code"),
+                manufacturer=_cell(row, mapping, "manufacturer"),
+                unit=_cell(row, mapping, "unit"),
+                qty_raw=qty_raw,
+                mass=_cell(row, mapping, "mass"),
+                note=_cell(row, mapping, "note"),
+                group=section or group,
+            )
+            current.qty = parse_qty(qty_raw)
+            if current.qty is None:
+                current.warnings.append(f"не удалось прочитать количество: «{qty_raw}»")
+            if not pos:
+                current.warnings.append("нет номера позиции")
+            elif not POS_OK.match(pos):
+                current.warnings.append(f"необычный номер позиции: «{pos}»")
+            if not name:
+                current.warnings.append("пустое наименование")
+            if not current.unit:
+                current.warnings.append("нет единицы измерения")
+            items.append(current)
             continue
-        # Строка без единицы и количества — заголовок раздела или помещения.
-        if not unit and not qty_raw:
-            header = section or f"{pos} {name}".strip()
-            if header:
-                group = header
+        if not name and not section:
             continue
-        item = SpecItem(
-            id=next_id + len(items) + 1,
-            page=1,
-            pos=pos,
-            pos_key=normalize_pos(pos),
-            description=name,
-            name=short_name(name),
-            type_mark=_cell(row, mapping, "type_mark") or _cell(row, mapping, "doc"),
-            code=_cell(row, mapping, "code"),
-            manufacturer=_cell(row, mapping, "manufacturer"),
-            unit=unit,
-            qty_raw=qty_raw,
-            mass=_cell(row, mapping, "mass"),
-            note=_cell(row, mapping, "note"),
-            group=section or group,
-        )
-        item.qty = parse_qty(qty_raw)
-        if item.qty is None:
-            item.warnings.append(f"не удалось прочитать количество: «{qty_raw}»")
-        if not pos:
-            item.warnings.append("нет номера позиции")
-        elif not (POS_RE.match(pos) or NO_POS_RE.match(pos)):
-            item.warnings.append(f"необычный номер позиции: «{pos}»")
-        if not name:
-            item.warnings.append("пустое наименование")
-        if not unit:
-            item.warnings.append("нет единицы измерения")
-        items.append(item)
+        in_item_merge = (r, mapping["pos"]) in filled or (r, mapping["qty"]) in filled or (mapping.get("unit") is not None and (r, mapping["unit"]) in filled)
+        if current is not None and not section and (in_item_merge or not _looks_like_section(name)):
+            # Строка внутри вертикального объединения позиции — её характеристика (продолжение
+            # описания); то же для непокрытой строки, если она не похожа на заголовок помещения.
+            current.description = f"{current.description} {name}".strip()
+            extra_mfr = _cell(row, mapping, "manufacturer")
+            if extra_mfr and extra_mfr.lower() not in current.manufacturer.lower():
+                current.manufacturer = f"{current.manufacturer} {extra_mfr}".strip()
+        elif section or _looks_like_section(name):
+            group, current = (section or name), None  # заголовок раздела или помещения
+        else:
+            # Оторванная строка без текущей позиции и не похожая на помещение (незамеченная
+            # характеристика, хвост заголовка) — раздел ею не портим.
+            current = None
     return items
 
 

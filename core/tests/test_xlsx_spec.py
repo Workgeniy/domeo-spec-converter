@@ -73,18 +73,66 @@ def test_not_a_specification_sheet() -> None:
     assert any("не найдено" in w for w in doc.warnings)
 
 
-def test_merged_cells_expand() -> None:
+def test_merged_qty_shared_between_two_items() -> None:
+    # Две разные позиции (свои номера), количество общее на обе через объединение.
     wb = Workbook()
     ws = wb.active
     ws.append(["Поз.", "Наименование", "Ед.", "Кол-во"])
-    ws.append(["1.1", "Стеллаж производственный", "шт.", 2])
-    ws.append(["1.2", "Стеллаж производственный", "шт.", 2])
-    ws.merge_cells("D2:D3")  # количество одно на две строки
+    ws.append(["1.1", "Стеллаж производственный 600", "шт.", 2])
+    ws.append(["1.2", "Стеллаж производственный 800", "шт.", None])
+    ws.merge_cells("D2:D3")
     ws["D2"] = 2
     buf = io.BytesIO()
     wb.save(buf)
     doc = parse_xlsx(buf.getvalue(), file_name="стеллажи.xlsx")
-    assert [s.qty for s in doc.summary] == [2.0, 2.0]
+    assert [s.pos for s in doc.summary] == ["1.1", "1.2"] and [s.qty for s in doc.summary] == [2.0, 2.0]
+
+
+def test_characteristics_fold_into_description() -> None:
+    # Как в реальных спецификациях: номер/ед./кол объединены по вертикали на строку товара и
+    # строки его характеристик — это одна позиция, характеристики уходят в описание.
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Объект, шифр ДОО-ТХ9"])
+    ws.append(["Поз.", "Наименование и техническая характеристика", "Тип, марка", "Поставщик", "Ед.", "Кол"])
+    ws.append([None, "Пом. 120 Кладовая", None, None, None, None])  # заголовок помещения (в столбце наименования)
+    ws.append(["П101", "Стол для белья", "С-1260 или аналог", "Вязьма, РФ", "шт.", 2])
+    ws.append([None, "Габаритные размеры, мм: 1215х590х840", None, None, None, None])  # характеристика
+    ws.append([None, "Электропитание: 1ф, 220 В", None, None, None, None])  # ещё характеристика
+    ws.append(["П102", "Весы напольные", "МП 150 или аналог", "МИДЛ, РФ", "шт.", 1])
+    ws.append([None, "Изделие соответствует ГОСТ 12345", None, None, None, None])  # незнакомая характеристика → не раздел
+    # Объединяем «Ед.» и «Кол» на строку товара и его характеристики.
+    ws.merge_cells("E4:E6")
+    ws.merge_cells("F4:F6")
+    buf = io.BytesIO()
+    wb.save(buf)
+    doc = parse_xlsx(buf.getvalue(), file_name="спец.xlsx")
+    assert doc.doc_code == "ДОО-ТХ9"
+    assert [s.pos for s in doc.summary] == ["П101", "П102"]  # характеристики не стали позициями
+    stol = doc.summary[0]
+    assert stol.qty == 2.0 and stol.unit == "шт." and stol.section == "Пом. 120 Кладовая"
+    assert "Габаритные размеры, мм: 1215х590х840" in stol.description and "Электропитание" in stol.description
+    # Незнакомая характеристика после П102 не создала раздел и не стала позицией.
+    assert "Изделие соответствует ГОСТ 12345" in doc.summary[1].description
+    assert all("ГОСТ 12345" not in (s.section or "") for s in doc.summary)
+
+
+def test_qty_header_named_just_kol() -> None:
+    # Столбец количества может называться ровно «Кол».
+    data = _book(["Поз.", "Наименование", "Ед.", "Кол"], [["1", "Стол", "шт.", 3]])
+    doc = parse_xlsx(data, file_name="к.xlsx")
+    assert len(doc.summary) == 1 and doc.summary[0].qty == 3.0
+
+
+def test_integer_and_mark_positions_are_not_flagged() -> None:
+    # Номера бывают целыми («1», «28») и кодами оборудования («М10.1», «ВК-1») — это нормально.
+    data = _book(
+        ["Поз.", "Наименование", "Ед.", "Кол"],
+        [["1", "Стол", "шт.", 1], ["28", "Стул", "шт.", 2], ["М10.1", "Рециркулятор", "шт.", 1], ["ВК-1", "Ванна", "шт.", 1], ["?!", "Странная", "шт.", 1]],
+    )
+    doc = parse_xlsx(data, file_name="н.xlsx")
+    flagged = [it.pos for it in doc.items if any("необычный номер" in w for w in it.warnings)]
+    assert flagged == ["?!"]  # только по-настоящему странный номер
 
 
 def test_dispatch_by_extension() -> None:
