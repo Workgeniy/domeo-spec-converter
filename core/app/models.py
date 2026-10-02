@@ -211,7 +211,7 @@ class KpSettings(BaseModel):
     contract_date: str = ""  # ДД.ММ.ГГГГ или ГГГГ-ММ-ДД
     supplier_position: str = "Генеральный директор"  # должность подписанта в блоке подписей
     customer_position: str = "Генеральный директор"
-    vat_rate: float = 0.2  # 0 — без НДС
+    vat_rate: float = 0.22  # 0 — без НДС
     markup_percent: float = 0.0  # наценка на базовую цену (графа-подсказка «пр» в образце)
     delivery_percent: float = 0.0  # доставка — входит в цену товара (графа «дост»)
     installation_percent: float = 0.0  # СМР от цены товара — только лист «1» (графа «монт»)

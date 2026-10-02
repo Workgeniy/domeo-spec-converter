@@ -264,7 +264,7 @@ public sealed record KpSettings
     public string ContractDate { get; init; } = "";
     public string SupplierPosition { get; init; } = "Генеральный директор";
     public string CustomerPosition { get; init; } = "Генеральный директор";
-    public double VatRate { get; init; } = 0.2;
+    public double VatRate { get; init; } = 0.22;
     public double MarkupPercent { get; init; }
     public double DeliveryPercent { get; init; }
     public double InstallationPercent { get; init; }

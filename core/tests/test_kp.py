@@ -96,6 +96,6 @@ def test_workbook_without_kp_is_working_export() -> None:
     wb = build_workbook(data)
     assert wb.sheetnames == ["Спецификация", "По помещениям", "Проверка"]
     ws = wb["Спецификация"]
-    assert ws["M4"].value == 10 and ws["K4"].value is None and ws["L4"].value == 0.2
+    assert ws["M4"].value == 10 and ws["K4"].value is None and ws["L4"].value == 0.22  # НДС по умолчанию 22 %
     assert ws["A5"].value == 2  # без параметров КП все позиции на одном листе
     assert ws["Q3"].value == "=N6" and ws["R4"].value is None  # без параметров нет и граф-подсказок

@@ -30,7 +30,7 @@ FILL_HEADER = PatternFill("solid", fgColor="D8D8D8")
 FILL_SUPPLIER = PatternFill("solid", fgColor="95B3D7")
 MONEY = "#,##0.00"
 PERCENT = "0.00%"
-VAT_RATE = 0.2
+VAT_RATE = 0.22  # запасная ставка НДС, если КП без настроек (рабочая выгрузка)
 SIGN_LINE = "_______________________"
 
 

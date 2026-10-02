@@ -8,7 +8,7 @@ export const DEFAULT_KP: KpSettings = {
   contract_date: '',
   supplier_position: 'Генеральный директор',
   customer_position: 'Генеральный директор',
-  vat_rate: 0.2,
+  vat_rate: 0.22,
   markup_percent: 0,
   delivery_percent: 0,
   installation_percent: 0,

@@ -12,6 +12,7 @@ interface Props {
 }
 
 const VAT_OPTIONS = [
+  { value: '0.22', label: 'НДС 22 %' },
   { value: '0.2', label: 'НДС 20 %' },
   { value: '0.1', label: 'НДС 10 %' },
   { value: '0', label: 'без НДС' },
