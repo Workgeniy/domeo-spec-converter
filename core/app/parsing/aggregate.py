@@ -68,3 +68,22 @@ def _section_for(item: SpecItem) -> str:
 
 def _norm_text(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower()).strip()
+
+
+def duplicate_key(item: SummaryItem) -> str:
+    """Ключ совпадения позиций между томами — по наименованию, не по номеру (номера в томах
+    независимы): строчные, ё→е, без пунктуации. Берём полное описание, иначе краткое имя."""
+    basis = item.description or item.name
+    return re.sub(r"[^a-zа-я0-9]+", " ", basis.lower().replace("ё", "е")).strip()
+
+
+def cross_volume_duplicates(summary: list[SummaryItem]) -> list[list[SummaryItem]]:
+    """Группы позиций с одинаковым наименованием из разных томов (``source_doc``) — такие легко
+    посчитать дважды. Внутри одного тома повторов нет (они уже сведены), поэтому группа значима,
+    только если охватывает минимум два разных документа."""
+    groups: dict[str, list[SummaryItem]] = {}
+    for item in summary:
+        key = duplicate_key(item)
+        if len(key) >= 3:
+            groups.setdefault(key, []).append(item)
+    return [items for items in groups.values() if len({i.source_doc for i in items}) >= 2]

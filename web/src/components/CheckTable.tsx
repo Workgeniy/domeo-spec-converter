@@ -1,13 +1,54 @@
-import { Alert, Badge, Group, Paper, SimpleGrid, Stack, Table, Text } from '@mantine/core'
-import { IconCircleCheck } from '@tabler/icons-react'
+import { Alert, Anchor, Badge, Group, Paper, SimpleGrid, Stack, Table, Text } from '@mantine/core'
+import { IconAlertTriangle, IconCircleCheck } from '@tabler/icons-react'
 
-import { useWorkspace } from '../store'
+import { crossVolumeDuplicates } from '../duplicates'
+import { rowKey, useWorkspace } from '../store'
+import { formatQty } from './format'
 import { TableScroller } from './TableScroller'
 
 interface Row {
   where: string
   pos: string
   text: string
+}
+
+/** Совпадающие позиции между томами: одно наименование в нескольких томах — риск задвоить
+ * количество. Рядом — быстрое «Исключить из КП» для лишнего вхождения. */
+function DuplicatesAlert() {
+  const documents = useWorkspace((s) => s.documents)
+  const updateRow = useWorkspace((s) => s.updateRow)
+  const groups = crossVolumeDuplicates(documents)
+  if (groups.length === 0) return null
+  return (
+    <Alert color="orange" icon={<IconAlertTriangle size={18} />} title={`Совпадающие позиции между томами: ${groups.length}`}>
+      <Text size="sm" mb="xs">
+        Одно наименование встречается в нескольких томах — проверьте, не задвоено ли количество. Лишнее вхождение можно исключить
+        из КП здесь же; исключённые в сумму не идут.
+      </Text>
+      <Stack gap="sm">
+        {groups.map((g) => (
+          <div key={g.key}>
+            <Text size="sm" fw={600} lineClamp={2}>
+              {g.name}
+            </Text>
+            <Group gap="xs" mt={2}>
+              {g.occurrences.map((o) => (
+                <Group key={rowKey(o.rowKey)} gap={4} wrap="nowrap">
+                  <Badge variant="light" color={o.excluded ? 'gray' : 'orange'} tt="none" size="sm" style={{ textDecoration: o.excluded ? 'line-through' : undefined }}>
+                    {o.docCode}
+                    {o.pos ? `, поз. ${o.pos}` : ''} — {o.qty === null ? 'кол-во не указано' : `${formatQty(o.qty)} шт.`}
+                  </Badge>
+                  <Anchor component="button" type="button" size="xs" onClick={() => updateRow(o.rowKey, { excluded: !o.excluded })}>
+                    {o.excluded ? 'вернуть' : 'исключить'}
+                  </Anchor>
+                </Group>
+              ))}
+            </Group>
+          </div>
+        ))}
+      </Stack>
+    </Alert>
+  )
 }
 
 export function CheckTable() {
@@ -25,6 +66,7 @@ export function CheckTable() {
 
   return (
     <Stack gap="md">
+      <DuplicatesAlert />
       <SimpleGrid cols={{ base: 1, md: 2, xl: 3 }}>
         {documents.map(({ id, doc }) => {
           const src = doc.documents[0]

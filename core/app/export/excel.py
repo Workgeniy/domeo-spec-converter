@@ -18,6 +18,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from ..models import ExportRequest, KpSettings, SourceDocument, SpecItem, SummaryItem
+from ..parsing.aggregate import cross_volume_duplicates
 from ..pricing.attributes import parse_params
 from ..pricing.indexation import indexation_factor, rate_for, years_between
 from .kp import format_date, price_row, round_half_up
@@ -624,6 +625,24 @@ def _fill_check_sheet(ws: Worksheet, data: ExportRequest) -> None:
             r += 1
         r += 1
 
+    duplicates = cross_volume_duplicates(data.summary) if len(documents) > 1 else []
+    if duplicates:
+        ws.cell(r, 1, "Совпадающие позиции между томами").font = bold
+        r += 1
+        ws.cell(r, 3, "Одно наименование встречается в нескольких томах — проверьте, не задвоено ли количество; лишнее исключите из КП.").font = normal
+        r += 1
+        for group in duplicates:
+            parts = ", ".join(f"{_dup_place(s)} — {_fmt_qty(s.qty)}" for s in group)
+            name = group[0].description or group[0].name
+            for idx, value in enumerate(("между томами", "", f"«{name[:200]}»: {parts}"), start=1):
+                cell = ws.cell(r, idx, value)
+                cell.font = normal
+                cell.fill = FILL_SUPPLIER
+                cell.border = BORDER
+                cell.alignment = Alignment(vertical="center", wrap_text=idx == 3)
+            r += 1
+        r += 1
+
     ws.cell(r, 1, "Замечания").font = bold
     r += 1
     for idx, title in enumerate(("Где", "Позиция", "Замечание"), start=1):
@@ -649,6 +668,18 @@ def _fill_check_sheet(ws: Worksheet, data: ExportRequest) -> None:
             cell.border = BORDER
             cell.alignment = Alignment(vertical="center", wrap_text=idx == 3)
         r += 1
+
+
+def _dup_place(item: SummaryItem) -> str:
+    """«ТХ2, поз. 7.48» — где именно встретилась совпавшая позиция."""
+    place = f"поз. {item.pos}" if item.pos else "без номера"
+    return f"{item.source_doc}, {place}" if item.source_doc else place
+
+
+def _fmt_qty(qty: float | None) -> str:
+    if qty is None:
+        return "кол-во не указано"
+    return f"{int(qty) if float(qty).is_integer() else qty} шт."
 
 
 def _legacy_source(data: ExportRequest) -> SourceDocument:

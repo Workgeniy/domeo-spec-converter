@@ -4,6 +4,7 @@ import { IconChevronDown, IconDownload, IconPlus, IconTrash, IconX } from '@tabl
 import { useMemo, useState } from 'react'
 
 import { exportExcel, type ExportKind } from '../api'
+import { crossVolumeDuplicates } from '../duplicates'
 import { buildExportRequest, downloadBlob } from '../export'
 import { kpTotals } from '../kp'
 import { useWorkspace, type WorkspaceDocument } from '../store'
@@ -36,6 +37,8 @@ export function WorkspaceView() {
     )
     return { items, positions: active.length, excluded: rows.length - active.length, priced: totals.priced, total: totals.total, warnings }
   }, [documents, kp, indexation])
+
+  const duplicateGroups = useMemo(() => crossVolumeDuplicates(documents).length, [documents])
 
   // kp — приложения к договору по образцу (листы «1» и «2»); cost — себестоимость для Домео;
   // working — рабочая выгрузка (свод, по помещениям, проверка).
@@ -161,7 +164,9 @@ export function WorkspaceView() {
             Формирование КП
           </Tabs.Tab>
           <Tabs.Tab value="detail">По помещениям ({stats.items})</Tabs.Tab>
-          <Tabs.Tab value="check">Проверка ({stats.warnings})</Tabs.Tab>
+          <Tabs.Tab value="check" rightSection={duplicateGroups > 0 ? <Badge size="xs" color="orange" circle>{duplicateGroups}</Badge> : undefined}>
+            Проверка ({stats.warnings})
+          </Tabs.Tab>
         </Tabs.List>
         <Tabs.Panel value="summary" pt="md">
           <SummaryTable />
