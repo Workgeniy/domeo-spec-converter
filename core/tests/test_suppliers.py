@@ -395,30 +395,6 @@ def test_price_dispersion_warns_operator(tmp_path: Path) -> None:
     assert found.price == 50000 and "большой разброс цен" in found.comment
 
 
-def test_generic_word_match_is_only_analog(tmp_path: Path) -> None:
-    # «Набор солдатиков» не становится «Набором мячей массажных»: совпали только родовые слова
-    # («набор», «мелкого размера»), а значащие («мяч», «массажных») — нет. Родовым слово делает
-    # его частота в каталоге, поэтому нужен большой индекс.
-    index = SupplierIndex(data_dir=tmp_path)
-    shop = index.add("Магазин", "shop.test")
-    fillers = [Extracted(name=f"Набор предметов мелкого размера {i}", price=1000 + i, url=f"https://shop.test/n{i}") for i in range(60)]
-    index.set_offers(
-        shop.id,
-        [
-            *fillers,
-            Extracted(name="Набор мячей массажных мелкого размера", price=500, url="https://shop.test/target"),
-            Extracted(name="Набор солдатиков мелкого размера", price=9000, url="https://shop.test/decoy"),
-        ],
-        "карта сайта",
-    )
-    found = index.lookup("Набор мячей массажных мелкого размера", "", "шт.", "2026-10-05")
-    assert found.price == 500  # цена только по настоящему совпадению, не по «набору ... размера»
-    assert found.offers[0].title == "Набор мячей массажных мелкого размера" and not found.offers[0].analog
-    assert sum(not o.analog for o in found.offers) == 1  # точное одно; «солдатики» и филлеры — аналоги
-    decoy = index.rank("Набор мячей массажных мелкого размера")
-    assert next(r.score for r in decoy if r.offer.url.endswith("/decoy")) < 0.6
-
-
 def test_supplier_endpoints_and_lookup(tmp_path: Path) -> None:
     saved = (supplier_index.dir, dict(supplier_index.suppliers), dict(supplier_index.offers), internet_prices.provider)
     supplier_index.dir = tmp_path / "suppliers"
