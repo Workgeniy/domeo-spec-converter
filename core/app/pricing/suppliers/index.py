@@ -40,6 +40,20 @@ ANALOG_THRESHOLD = 0.45  # ниже — не показываем даже ка�
 OFFERS_SHOWN = 6
 DEFAULT_AUTOCRAWL_PAGES = 300
 DEFAULT_MIN_SHOPS = 3  # столько разных магазинов по позиции считаем «картиной рынка»
+# Зеркала магазинов на доменах стран СНГ/Балтии дают цену в местной валюте (та же миска:
+# entero.by — 20, entero.ru — 545, entero.uz — 102 348): для рублёвой цены берём только рынок РФ.
+BLOCKED_TLDS = frozenset({"by", "ua", "kz", "uz", "am", "az", "ge", "kg", "tj", "tm", "md", "ee", "lv", "lt"})
+# Родовое слово («набор», «машина», «стол») встречается у большой доли каталога и само по себе
+# совпадением позиций не считается: оценку даёт совпадение по редким, значащим словам.
+GENERIC_DF_MIN = 50
+GENERIC_DF_RATIO = 0.02
+# Цена-выброс (опт, чужая валюта, ошибка разметки) не должна тянуть медиану: при ≥4 ценах
+# отбрасываем те, что отличаются от медианы больше чем в OUTLIER_FACTOR раз.
+OUTLIER_FACTOR = 5.0
+OUTLIER_MIN_COUNT = 4
+# Если после отбора цены всё равно расходятся в разы, одним числом рынок не описать (у «холодильника
+# 95 л» и бытовые, и лабораторные): предупреждаем оператора вместо тихой медианы.
+DISPERSION_FACTOR = 8.0
 
 
 def _today() -> str:
@@ -49,6 +63,12 @@ def _today() -> str:
 def _host(site: str) -> str:
     host = urlsplit(site).netloc.lower() if "://" in site else site.lower()
     return host[4:] if host.startswith("www.") else host
+
+
+def _foreign_market(url: str) -> bool:
+    """Домен не российского рынка — цена в чужой валюте. Пустой url (прайс без ссылки) — доверяем."""
+    host = _host(url).split(":")[0]
+    return "." in host and host.rsplit(".", 1)[-1] in BLOCKED_TLDS
 
 
 PARAM_MATCH_BONUS = 0.1
@@ -96,8 +116,8 @@ class OfferMatcher:
     def add(self, offers: list[SupplierOffer]) -> None:
         for offer in offers:
             title = product_name(offer.name)  # без хвоста заголовка страницы, если он есть
-            if offer.price <= PLACEHOLDER_PRICE or looks_like_listing(title):
-                continue  # заглушка вместо цены или страница раздела — не товар
+            if offer.price <= PLACEHOLDER_PRICE or looks_like_listing(title) or _foreign_market(offer.url):
+                continue  # заглушка вместо цены, страница раздела или чужой валютный рынок — не берём
             i = len(self.offers)
             self.offers.append(offer)
             info = analyze_name(title)
@@ -242,15 +262,24 @@ class OfferMatcher:
             score = min(1.0, score + 0.15)
         return round(score, 3), common
 
+    def _informative(self, stem: str) -> bool:
+        """Слово значащее (редкое), а не родовое: встречается не у слишком большой доли каталога.
+        Родовые слова («набор», «машина», «стол») сами по себе позиции не отождествляют."""
+        return len(self.index.get(stem, ())) <= max(GENERIC_DF_MIN, int(GENERIC_DF_RATIO * len(self.offers)))
+
     def _same_item(self, query: set[str], head: tuple[str, str], common: int, i: int) -> bool:
         """Тот ли это товар, а не соседний с теми же словами: общих слов не меньше двух (если в
-        запросе их два и больше), первое слово запроса есть в предложении, главное слово
-        предложения — в запросе, и предложение не во множественном числе там, где в проекте
-        единственное. Иначе «Столы» (страница раздела) сошлись бы со «Стол воспитателя»,
-        «Перегородка-стеллаж» — со «Стеллаж металлический», «Карнизы для штор» — со «Штора с карнизом»."""
+        запросе их два и больше), среди общих есть значащее (не только родовое «набор»/«машина»),
+        первое слово запроса есть в предложении, главное слово предложения — в запросе, и
+        предложение не во множественном числе там, где в проекте единственное. Иначе «Столы»
+        (страница раздела) сошлись бы со «Стол воспитателя», «Перегородка-стеллаж» — со «Стеллаж
+        металлический», «Набор солдатиков» — с «Набор мячей массажных»."""
         first, number_word = head
         if len(query) >= 2 and common < 2:
             return False
+        informative = {s for s in query if self._informative(s)}
+        if informative and not (informative & self.offer_tokens[i]):
+            return False  # совпали только родовые слова, а значащие (мяч, самосвал) — нет
         if first and first not in self.offer_tokens[i]:
             return False
         offer_head = self.offer_heads[i]
@@ -720,18 +749,27 @@ class SupplierIndex:
         confident = [r for r in ranked if r.score >= MATCH_THRESHOLD]
         confirmed = [r for r in confident if r.confirmed]
         same_model = [r for r in confident if r.model]
-        basis = confirmed or (same_model if not manual.checkable() else []) or confident
+        if confirmed:
+            chosen, kind = confirmed, "confirmed"
+        elif same_model and not manual.checkable():
+            chosen, kind = same_model, "model"
+        else:
+            chosen, kind = confident, "all"
+        basis = _without_outliers(chosen)  # цены-выбросы (опт, лаборатория, ошибка) медиану не тянут
         if basis:
             prices = [r.offer.price for r in basis]
             price = float(statistics.median(prices))
             suppliers = len({r.offer.supplier for r in basis})
             low, high = (f"{value:,.0f}".replace(",", " ") for value in (min(prices), max(prices)))
+            dropped = len(chosen) - len(basis)
             comment = f"совпадений {len(prices)} у {suppliers} поставщ., от {low} до {high} ₽; взята медиана"
-            if confirmed:
+            if dropped:
+                comment += f" (ещё {dropped} с ценой-выбросом отброшены)"
+            if kind == "confirmed":
                 comment = f"с заданными параметрами {comment}"
                 if len(confirmed) < len(confident):
                     comment += f"; ещё {len(confident) - len(confirmed)} без подтверждения параметров в цену не вошли"
-            elif basis is same_model:
+            elif kind == "model":
                 comment = f"по модели из проекта {comment}"
                 if len(same_model) < len(confident):
                     comment += f"; ещё {len(confident) - len(same_model)} других моделей в цену не вошли"
@@ -741,6 +779,8 @@ class SupplierIndex:
                 comment += "; в предложениях параметры не указаны — проверьте размер"
             elif params_text and not any(r.note == NOTE_PARAMS_MATCH for r in confident):
                 comment += "; в предложениях указаны не все параметры — проверьте размер"
+            if min(prices) > 0 and max(prices) / min(prices) >= DISPERSION_FACTOR:
+                comment += "; большой разброс цен — проверьте, не попали ли изделия другого класса"
         else:
             price = None
             comment = "точных совпадений нет, показаны похожие позиции — цену выбирает оператор"
@@ -750,6 +790,18 @@ class SupplierIndex:
             model_text += " — в каталогах её нет, цена по похожим"
         comment = "; ".join(p for p in (model_text, manual_text, params_text, comment) if p)
         return InternetLookup(status="found", query=query, looked_up_at=today, offers=offers, price=price, comment=comment, provider="suppliers")
+
+
+def _without_outliers(basis: list[Ranked]) -> list[Ranked]:
+    """Убирает ценовые выбросы перед расчётом цены: при достаточном числе предложений — те, что
+    отличаются от медианы больше чем в OUTLIER_FACTOR раз (опт, чужая валюта, ошибка разметки)."""
+    if len(basis) < OUTLIER_MIN_COUNT:
+        return basis
+    med = statistics.median([r.offer.price for r in basis])
+    if med <= 0:
+        return basis
+    kept = [r for r in basis if med / OUTLIER_FACTOR <= r.offer.price <= med * OUTLIER_FACTOR]
+    return kept if 2 <= len(kept) < len(basis) else basis
 
 
 def _clean_sections(sections: list[str] | None) -> list[str]:

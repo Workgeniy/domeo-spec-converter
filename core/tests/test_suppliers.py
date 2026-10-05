@@ -350,6 +350,75 @@ def test_reference_model_from_project(tmp_path: Path) -> None:
     assert missing.price == plain.price and missing.comment.startswith("модель в проекте: Бирюса 700 — в каталогах её нет, цена по похожим")
 
 
+def test_foreign_mirror_excluded_from_price(tmp_path: Path) -> None:
+    # Зеркала магазина на .by и .uz дают цену в чужой валюте — в индекс и в цену не идут.
+    index = SupplierIndex(data_dir=tmp_path)
+    shop = index.add("Посуда", "posuda.ru")
+    index.set_offers(
+        shop.id,
+        [
+            Extracted(name="Миска нержавеющая 6 л", price=545, url="https://entero.ru/a"),
+            Extracted(name="Миска нержавеющая 6 л", price=20, url="https://entero.by/a"),  # бел. рубли
+            Extracted(name="Миска нержавеющая 6 л", price=102348, url="https://entero.uz/a"),  # узб. сумы
+        ],
+        "карта сайта",
+    )
+    found = index.lookup("Миска нержавеющая 6 л", "", "шт.", "2026-10-05")
+    assert found.price == 545 and len(found.offers) == 1
+    assert found.offers[0].url == "https://entero.ru/a"
+
+
+def test_price_outlier_trimmed_before_median(tmp_path: Path) -> None:
+    # Четыре цены, одна — выброс (опт/лаборатория): в медиану не входит, в комментарии её тоже нет.
+    index = SupplierIndex(data_dir=tmp_path)
+    shop = index.add("Холод", "holod.ru")
+    index.set_offers(
+        shop.id,
+        [Extracted(name="Холодильник бытовой", price=p, url=f"https://holod.ru/{p}") for p in (10000, 12000, 14000, 500000)],
+        "карта сайта",
+    )
+    found = index.lookup("Холодильник бытовой", "", "шт.", "2026-10-05")
+    assert found.price == 12000 and "от 10 000 до 14 000 ₽" in found.comment  # 500 000 отброшен
+
+
+def test_price_dispersion_warns_operator(tmp_path: Path) -> None:
+    # Цены расходятся в разы и после отбора выбросов (бытовое и профессиональное вперемешку) —
+    # медиана есть, но оператора предупреждаем: возможно, затесалась другая категория.
+    index = SupplierIndex(data_dir=tmp_path)
+    shop = index.add("Холод", "holod.ru")
+    index.set_offers(
+        shop.id,
+        [Extracted(name="Холодильник бытовой", price=p, url=f"https://holod.ru/{p}") for p in (10000, 40000, 60000, 85000)],
+        "карта сайта",
+    )
+    found = index.lookup("Холодильник бытовой", "", "шт.", "2026-10-05")
+    assert found.price == 50000 and "большой разброс цен" in found.comment
+
+
+def test_generic_word_match_is_only_analog(tmp_path: Path) -> None:
+    # «Набор солдатиков» не становится «Набором мячей массажных»: совпали только родовые слова
+    # («набор», «мелкого размера»), а значащие («мяч», «массажных») — нет. Родовым слово делает
+    # его частота в каталоге, поэтому нужен большой индекс.
+    index = SupplierIndex(data_dir=tmp_path)
+    shop = index.add("Магазин", "shop.test")
+    fillers = [Extracted(name=f"Набор предметов мелкого размера {i}", price=1000 + i, url=f"https://shop.test/n{i}") for i in range(60)]
+    index.set_offers(
+        shop.id,
+        [
+            *fillers,
+            Extracted(name="Набор мячей массажных мелкого размера", price=500, url="https://shop.test/target"),
+            Extracted(name="Набор солдатиков мелкого размера", price=9000, url="https://shop.test/decoy"),
+        ],
+        "карта сайта",
+    )
+    found = index.lookup("Набор мячей массажных мелкого размера", "", "шт.", "2026-10-05")
+    assert found.price == 500  # цена только по настоящему совпадению, не по «набору ... размера»
+    assert found.offers[0].title == "Набор мячей массажных мелкого размера" and not found.offers[0].analog
+    assert sum(not o.analog for o in found.offers) == 1  # точное одно; «солдатики» и филлеры — аналоги
+    decoy = index.rank("Набор мячей массажных мелкого размера")
+    assert next(r.score for r in decoy if r.offer.url.endswith("/decoy")) < 0.6
+
+
 def test_supplier_endpoints_and_lookup(tmp_path: Path) -> None:
     saved = (supplier_index.dir, dict(supplier_index.suppliers), dict(supplier_index.offers), internet_prices.provider)
     supplier_index.dir = tmp_path / "suppliers"
