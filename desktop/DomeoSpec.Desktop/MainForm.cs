@@ -29,6 +29,15 @@ public sealed class MainForm : Form
 
     private async void OnShown(object? sender, EventArgs e)
     {
+        if (!WebView2Available())  // без Edge WebView2 Runtime окно не отрисуется — подсказываем, что ставить
+        {
+            _status.Text =
+                "Для работы приложения нужен компонент\n«Microsoft Edge WebView2 Runtime» (бесплатный, от Microsoft).\n\n" +
+                "Скачайте «Evergreen Standalone Installer» и установите:\n" +
+                "https://developer.microsoft.com/microsoft-edge/webview2/\n\n" +
+                "После установки запустите Domeo снова.";
+            return;
+        }
         try
         {
             await _backend.StartAsync(s => BeginInvoke(() => _status.Text = s), CancellationToken.None);
@@ -42,5 +51,11 @@ public sealed class MainForm : Form
         {
             _status.Text = "Не удалось запустить приложение:\n" + ex.Message;
         }
+    }
+
+    private static bool WebView2Available()
+    {
+        try { return !string.IsNullOrEmpty(CoreWebView2Environment.GetAvailableBrowserVersionString()); }
+        catch { return false; }  // рантайм не установлен
     }
 }

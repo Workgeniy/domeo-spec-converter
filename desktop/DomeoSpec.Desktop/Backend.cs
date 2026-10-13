@@ -27,10 +27,12 @@ public sealed class Backend : IAsyncDisposable
         Directory.CreateDirectory(DataDir);
 
         string? conn = null;
-        var pgBin = Path.Combine(_root, "pgsql", "bin");
-        if (File.Exists(Path.Combine(pgBin, "pg_ctl.exe"))) // портативный PostgreSQL в комплекте
+        var bundlePgBin = Path.Combine(_root, "pgsql", "bin");
+        if (File.Exists(Path.Combine(bundlePgBin, "pg_ctl.exe"))) // портативный PostgreSQL в комплекте
         {
-            _pg = new PostgresServer(pgBin, Path.Combine(DataDir, "pgdata"));
+            status("Подготовка базы данных…");
+            var (bin, data) = ResolvePostgres(bundlePgBin);  // гарантируем ASCII-путь для PostgreSQL
+            _pg = new PostgresServer(bin, data);
             await _pg.StartAsync(status, ct);
             conn = _pg.ConnectionString;
         }
@@ -133,6 +135,56 @@ public sealed class Backend : IAsyncDisposable
         var port = ((IPEndPoint)l.LocalEndpoint).Port;
         l.Stop();
         return port;
+    }
+
+    // PostgreSQL на Windows не работает из пути с не-ASCII символами — ломаются и данные, и сами
+    // бинарники (в share/ лежат файлы локали/кодировок). Если приложение распаковано в папку с
+    // кириллицей или у пользователя кириллическое имя профиля (частый случай) — переносим кластер
+    // и, при необходимости, бинарники PostgreSQL в гарантированно ASCII-расположение
+    // (C:\ProgramData\DomeoSpec). Так приложение работает, куда бы его ни распаковали.
+    private (string bin, string data) ResolvePostgres(string bundlePgBin)
+    {
+        var localData = Path.Combine(DataDir, "pgdata");
+        if (IsAscii(bundlePgBin) && IsAscii(localData))
+            return (bundlePgBin, localData);  // всё ASCII — работаем на месте, данные в профиле
+
+        var asciiBase = AsciiDataBase();
+        var data = Path.Combine(asciiBase, "pgdata");
+        var bin = bundlePgBin;
+        if (!IsAscii(bundlePgBin))  // бинарники в кириллическом пути — копируем их в ASCII (один раз)
+        {
+            var dest = Path.Combine(asciiBase, "pgsql");
+            bin = Path.Combine(dest, "bin");
+            if (!File.Exists(Path.Combine(bin, "pg_ctl.exe")))
+                CopyDir(Path.GetDirectoryName(bundlePgBin)!, dest);  // bundle\pgsql -> asciiBase\pgsql
+        }
+        return (bin, data);
+    }
+
+    private static bool IsAscii(string path)
+    {
+        foreach (var c in path)
+            if (c > '\x7f') return false;
+        return true;
+    }
+
+    private static string AsciiDataBase()
+    {
+        var common = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DomeoSpec");
+        return IsAscii(common) ? common : @"C:\DomeoSpecData";  // ProgramData почти всегда ASCII; на всякий случай — корень диска
+    }
+
+    private static void CopyDir(string src, string dst)
+    {
+        src = Path.GetFullPath(src);
+        dst = Path.GetFullPath(dst);
+        Directory.CreateDirectory(dst);
+        foreach (var file in Directory.GetFiles(src, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(dst, Path.GetRelativePath(src, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target, overwrite: true);
+        }
     }
 
     // Пути репозитория — для запуска на машине разработки (exe в desktop/.../bin/Debug/net9.0-windows/).

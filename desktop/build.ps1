@@ -51,6 +51,7 @@ Copy-Item (Join-Path $dist "api") (Join-Path $bundle "api") -Recurse -Force
 foreach ($sub in "bin","lib","share") {
   robocopy (Join-Path $PgSource $sub) (Join-Path $bundle "pgsql\$sub") /E /NFL /NDL /NJH /NJS /R:1 /W:1 | Out-Null
 }
+Copy-Item (Join-Path $desktop "INSTALL.txt") (Join-Path $bundle "Как установить.txt") -Force  # памятка для пользователя
 
 if ($TesseractSetup -and (Test-Path $TesseractSetup)) {
   Say "OCR (tesseract)"
