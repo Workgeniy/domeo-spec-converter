@@ -283,5 +283,10 @@ Swagger API: http://localhost:5080/swagger. Внутренний API ядра (8
 
 ## Документация
 
+- [docs/KP_TEMPLATES.md](docs/KP_TEMPLATES.md) — загрузка, выбор и требования к шаблонам КП.
+
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — как устроен разбор, модель данных, решения.
 - [docs/PLAN.md](docs/PLAN.md) — этапы и статус.
+
+
+Рабочие объекты автоматически сохраняются в PostgreSQL и доступны в общем списке «Объекты». Исходники и сформированные версии КП хранятся отдельно в той же БД. Настройка подключения, резервное копирование, восстановление версий и целевая маржа: [docs/QUOTATION_HISTORY.md](docs/QUOTATION_HISTORY.md).

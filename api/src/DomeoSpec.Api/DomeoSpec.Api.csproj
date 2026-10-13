@@ -15,4 +15,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Content Update="appsettings.Local.json" CopyToPublishDirectory="Never" CopyToOutputDirectory="Never" />
+  </ItemGroup>
 </Project>

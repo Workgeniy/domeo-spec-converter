@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import re
+from threading import Lock
 from pathlib import Path
 from urllib.parse import quote
 
@@ -38,6 +39,7 @@ from .models import (
 )
 from .parsing.ocr import default_provider
 from .parsing.document import is_supported, parse_document
+from .parsing.drawing import drawing_text
 from .pricing.indexation import IndexationStore, history_indexation
 from .pricing.internet import InternetPriceService
 from .pricing.store import PriceListStore
@@ -47,6 +49,8 @@ from .pricing.websearch import engine_from_env
 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 MAX_INTERNET_ITEMS = 50  # поиск — долгий (десятки секунд на позицию), фронт шлёт пачками
+MAX_DRAWING_BYTES = 25 * 1024 * 1024
+drawing_lock = Lock()
 
 load_env_file()  # ключи для локального запуска — из core/.env, если он есть
 price_lists = PriceListStore()
@@ -263,9 +267,33 @@ def parse(file: UploadFile = File(...), file_name: str | None = Form(None)) -> P
         raise HTTPException(422, f"Не удалось разобрать файл: {exc}") from exc
 
 
+@app.post("/api/drawing-text")
+def extract_drawing_text(file: UploadFile = File(...), pages: str = Form(...)) -> dict:
+    # Ограничение объёма и числа страниц: обрабатываем последовательно, без растра и моделей.
+    if not (file.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(400, "План нужен в формате PDF.")
+    if not drawing_lock.acquire(blocking=False):
+        raise HTTPException(503, "Другая сверка плана уже выполняется. Повторите после её завершения.")
+    try:
+        content = file.file.read(MAX_DRAWING_BYTES + 1)
+        if len(content) > MAX_DRAWING_BYTES:
+            raise HTTPException(413, "Для сверки выберите PDF до 25 МБ или отдельный файл с нужными планами.")
+        selected = [int(value.strip()) for value in pages.split(",") if value.strip()]
+        return drawing_text(content, selected)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(422, f"Не удалось прочитать план: {exc}") from exc
+    finally:
+        drawing_lock.release()
+
+
 @app.post("/api/export")
 def export(data: ExportRequest) -> StreamingResponse:
-    wb = build_workbook(data)
+    try:
+        wb = build_workbook(data)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     buffer = io.BytesIO()
     wb.save(buffer)
     buffer.seek(0)

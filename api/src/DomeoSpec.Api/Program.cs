@@ -6,6 +6,9 @@ using DomeoSpec.Infrastructure;
 using Microsoft.AspNetCore.Http.Features;
 
 var builder = WebApplication.CreateBuilder(args);
+// Локальные реквизиты БД не попадают в Git или Docker-образ; переменные среды приоритетнее.
+if (builder.Environment.IsDevelopment())
+    builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true).AddEnvironmentVariables();
 
 // --- Services -----------------------------------------------------------------
 
@@ -14,7 +17,6 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers().AddJsonOptions(o =>
 {
     o.JsonSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
-    o.JsonSerializerOptions.DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower;
 });
 
 // Загрузка тома до 100 МБ (ограничение сценария — в ParseSpecificationHandler).

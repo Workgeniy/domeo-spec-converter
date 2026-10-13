@@ -13,6 +13,8 @@ public interface IParsingEngine
     Task<ExportedFile> ExportAsync(ParsedDocument document, CancellationToken ct);
 
     Task<EngineHealth> GetHealthAsync(CancellationToken ct);
+    Task<DrawingText> ExtractDrawingTextAsync(Stream pdf, string pages, CancellationToken ct)
+        => throw new NotSupportedException();
 }
 
 public sealed record ExportedFile(byte[] Content, string FileName, string ContentType);

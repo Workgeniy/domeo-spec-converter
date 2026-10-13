@@ -35,9 +35,15 @@ def round_half_up(value: float, digits: int) -> float:
     return math.floor(value * k + 0.5) / k
 
 
+def effective_markup(settings: KpSettings) -> float:
+    """Эквивалент наценки для служебной графы «пр», совместимой со старыми шаблонами."""
+    return settings.markup_percent if settings.margin_percent is None else 100 * settings.margin_percent / (100 - settings.margin_percent)
+
+
 def price_row(base: float, settings: KpSettings, with_installation: bool = True) -> RowPrice:
     digits = 0 if settings.round_to_ruble else 2
-    sale = round_half_up(base * (1 + settings.markup_percent / 100) * (1 + settings.delivery_percent / 100), digits)
+    multiplier = 1 + settings.markup_percent / 100 if settings.margin_percent is None else 1 / (1 - settings.margin_percent / 100)
+    sale = round_half_up(base * multiplier * (1 + settings.delivery_percent / 100), digits)
     installation = round_half_up(sale * settings.installation_percent / 100, digits) if with_installation else 0.0
     return RowPrice(sale, installation, round_half_up(sale + installation, digits))
 

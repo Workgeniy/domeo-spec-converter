@@ -9,6 +9,22 @@ namespace DomeoSpec.Api.Controllers;
 [Route("api/specifications")]
 public sealed class SpecificationsController : ControllerBase
 {
+    [HttpPost("check-drawing")]
+    [RequestSizeLimit(100L * 1024 * 1024)]
+    public async Task<ActionResult<ApiResponse<DrawingCheckResult>>> CheckDrawing(IFormFile? file,
+        [FromForm] string pages, [FromForm] string items, [FromServices] CheckDrawingHandler handler, CancellationToken ct)
+    {
+        if (file is null) throw new ValidationFailedException("Не передан PDF-план.");
+        IReadOnlyList<SummaryItem> rows;
+        try
+        {
+            rows = System.Text.Json.JsonSerializer.Deserialize<SummaryItem[]>(items,
+                new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.SnakeCaseLower }) ?? [];
+        }
+        catch (System.Text.Json.JsonException) { throw new ValidationFailedException("Некорректный список товаров."); }
+        await using var stream = file.OpenReadStream();
+        return ApiResponse<DrawingCheckResult>.Ok(await handler.HandleAsync(stream, file.FileName, file.Length, pages, rows, ct));
+    }
     /// <summary>Разобрать PDF тома ТХ: строки спецификации, свод, замечания.</summary>
     [HttpPost("parse")]
     [RequestSizeLimit(100L * 1024 * 1024)]

@@ -3,7 +3,7 @@ import { notifications } from '@mantine/notifications'
 import { useEffect, useMemo, useState } from 'react'
 
 import { getIndexation, setIndexationRates, type HistoryIndexation, type IndexationGroup, type IndexationSource } from '../api'
-import { indexedPrice, yearsBetween } from '../kp'
+import { indexedPrice, todayISO, yearsBetween } from '../kp'
 import { useWorkspace } from '../store'
 import { formatMoney } from './format'
 
@@ -59,15 +59,23 @@ export function IndexationPanel() {
   const sectionsKey = sections.join('|')
 
   useEffect(() => {
+    let cancelled = false
     getIndexation()
       .then((info) => {
+        if (cancelled) return
         setHistory(info.history)
         const known: Record<string, RateRow> = {}
         for (const r of info.rates) known[r.section] = { section: r.section, rate: r.rate, source: r.source, note: r.note }
-        setServerRates(known)
-        setIndexation({ rates: Object.fromEntries(info.rates.map((r) => [r.section, r.rate])) })
+        if (useWorkspace.getState().cloud.revision || useWorkspace.getState().quotationId) {
+          setServerRates(Object.fromEntries(Object.entries(useWorkspace.getState().indexation.rates)
+            .map(([section, rate]) => [section, { section, rate, source: 'manual' as const, note: 'Из сохранённого объекта' }])))
+        } else {
+          setServerRates(known)
+          setIndexation({ rates: Object.fromEntries(info.rates.map((r) => [r.section, r.rate])) })
+        }
       })
-      .catch((e) => notifications.show({ color: 'red', title: 'Индексация', message: message(e) }))
+      .catch((e) => { if (!cancelled) notifications.show({ color: 'red', title: 'Индексация', message: message(e) }) })
+    return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -90,17 +98,17 @@ export function IndexationPanel() {
   }, [serverRates, sectionsKey, history])
 
   const draftRates = useMemo(() => Object.fromEntries(rows.filter((r) => typeof r.rate === 'number').map((r) => [r.section, r.rate as number])), [rows])
-  const years = indexation.date ? yearsBetween(new Date().toISOString().slice(0, 10), indexation.date) : 0
+  const years = indexation.date ? yearsBetween(indexation.base_date || todayISO(), indexation.date) : 0
   const totals = useMemo(() => {
     let today = 0
     let dated = 0
     for (const row of active) {
       if (row.price === null || row.qty === null) continue
       today += row.price * row.qty
-      dated += indexedPrice(row.price, row.section, { date: indexation.date, rates: draftRates, apply_to_kp: false }) * row.qty
+      dated += indexedPrice(row.price, row.section, { ...indexation, rates: draftRates, apply_to_kp: false }) * row.qty
     }
     return { today, dated }
-  }, [active, indexation.date, draftRates])
+  }, [active, indexation, draftRates])
 
   function patch(section: string, change: Partial<RateRow>) {
     setRows((current) => current.map((r) => (r.section === section ? { ...r, ...change } : r)))
@@ -141,6 +149,10 @@ export function IndexationPanel() {
   return (
     <Paper withBorder p="md">
       <Stack gap="sm">
+        {indexation.base_date && <Group>
+          <Text size="sm" c="dimmed">Дата расчёта индексации: {indexation.base_date} (сохранена вместе с КП).</Text>
+          <Button size="compact-xs" variant="subtle" onClick={() => setIndexation({ base_date: todayISO() })}>Пересчитать от сегодня</Button>
+        </Group>}
         <Group justify="space-between" align="flex-end" wrap="wrap">
           <div>
             <Text fw={700}>Индексация к дате поставки</Text>

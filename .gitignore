@@ -19,6 +19,7 @@ web/.vite/
 *.local
 
 # ---- Env / secrets ----
+**/appsettings.Local.json
 .env
 *.env
 !.env.example
@@ -38,3 +39,8 @@ Thumbs.db
 
 deploy/.env
 deploy/.htpasswd
+
+# ---- десктоп-сборка (артефакты) ----
+desktop/build/
+desktop/**/bin/
+desktop/**/obj/

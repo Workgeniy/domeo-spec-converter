@@ -10,6 +10,7 @@ public static class DependencyInjection
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
         services.AddScoped<ParseSpecificationHandler>();
+        services.AddScoped<CheckDrawingHandler>();
         services.AddScoped<ExportSpecificationHandler>();
         services.AddScoped<UploadPriceListHandler>();
         services.AddScoped<MatchPriceListHandler>();
@@ -18,6 +19,10 @@ public static class DependencyInjection
         services.AddScoped<UploadSupplierPriceListHandler>();
         services.AddScoped<UpdateSupplierHandler>();
         services.AddScoped<SetIndexationHandler>();
+        services.AddScoped<DomeoSpec.Application.Quotations.SaveQuotationHandler>();
+        services.AddScoped<DomeoSpec.Application.Quotations.SaveProjectHandler>();
+        services.AddScoped<DomeoSpec.Application.Uploads.SaveUploadHandler>();
+        services.AddScoped<DomeoSpec.Application.Uploads.ParseUploadHandler>();
         return services;
     }
 }

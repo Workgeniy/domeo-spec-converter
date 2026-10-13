@@ -10,6 +10,7 @@ export const DEFAULT_KP: KpSettings = {
   customer_position: 'Генеральный директор',
   vat_rate: 0.22,
   markup_percent: 0,
+  margin_percent: 0,
   delivery_percent: 0,
   installation_percent: 0,
   round_to_ruble: false,
@@ -33,7 +34,8 @@ function roundTo(value: number, digits: number): number {
 
 export function priceRow(base: number, s: KpSettings, withInstallation = true): RowPrice {
   const digits = s.round_to_ruble ? 0 : 2
-  const sale = roundTo(base * (1 + s.markup_percent / 100) * (1 + s.delivery_percent / 100), digits)
+  const multiplier = s.margin_percent == null ? 1 + s.markup_percent / 100 : 1 / (1 - s.margin_percent / 100)
+  const sale = roundTo(base * multiplier * (1 + s.delivery_percent / 100), digits)
   const installation = withInstallation ? roundTo((sale * s.installation_percent) / 100, digits) : 0
   return { sale, installation, unitTotal: roundTo(sale + installation, digits) }
 }
@@ -64,7 +66,7 @@ export function rateFor(section: string, rates: Record<string, number>): number 
 }
 
 /** Цена к дате поставки: base × (1 + ставка/100) ^ (лет до даты). Без даты или ставки — как есть. */
-export function indexedPrice(price: number, section: string, ix: Indexation, from = todayISO()): number {
+export function indexedPrice(price: number, section: string, ix: Indexation, from = ix.base_date || todayISO()): number {
   if (!ix.date) return price
   const rate = rateFor(section, ix.rates)
   if (rate === null) return price

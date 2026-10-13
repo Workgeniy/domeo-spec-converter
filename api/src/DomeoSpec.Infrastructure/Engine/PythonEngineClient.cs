@@ -18,7 +18,6 @@ public sealed class PythonEngineClient(HttpClient http) : IParsingEngine
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-        DictionaryKeyPolicy = JsonNamingPolicy.SnakeCaseLower,
     };
 
     public async Task<ParsedDocument> ParseAsync(Stream pdf, string fileName, CancellationToken ct)
@@ -62,6 +61,16 @@ public sealed class PythonEngineClient(HttpClient http) : IParsingEngine
         {
             return new EngineHealth(false, null);
         }
+    }
+
+    public async Task<DrawingText> ExtractDrawingTextAsync(Stream pdf, string pages, CancellationToken ct)
+    {
+        using var form = new MultipartFormDataContent();
+        form.Add(new StreamContent(pdf), "file", "drawing.pdf");
+        form.Add(new StringContent(pages), "pages");
+        using var response = await SendAsync(() => http.PostAsync("/api/drawing-text", form, ct), ct);
+        return await response.Content.ReadFromJsonAsync<DrawingText>(Json, ct)
+            ?? throw new ServiceUnavailableException("Ядро вернуло пустой ответ при чтении плана.");
     }
 
     private static async Task<HttpResponseMessage> SendAsync(Func<Task<HttpResponseMessage>> send, CancellationToken ct)

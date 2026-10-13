@@ -82,6 +82,7 @@ public sealed class SpecificationsApiTests : IClassFixture<ApiFactory>
         // Фронт прикладывает параметры КП к отредактированному документу.
         data["summary"]![0]!["price"] = 1500.5;
         data["summary"]![0]!["installation"] = false;
+        data["kp_template"] = "UEsDBAo=";
         data["kp"] = new JsonObject
         {
             ["contract_number"] = "12/2026",
@@ -112,6 +113,7 @@ public sealed class SpecificationsApiTests : IClassFixture<ApiFactory>
         Assert.Equal(10, exported.Kp.MarkupPercent);
         Assert.Equal(2, exported.Kp.DeliveryPercent);
         Assert.Equal("Директор", exported.Kp.SupplierPosition);
+        Assert.Equal("UEsDBAo=", exported.KpTemplate);
     }
 
     [Fact]

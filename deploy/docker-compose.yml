@@ -35,6 +35,10 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       Engine__BaseUrl: http://core:8000
       Engine__TimeoutSeconds: "600"
+    # ConnectionStrings__Quotations — адрес существующего PostgreSQL, БД и отдельный пользователь.
+    env_file:
+      - path: database.env
+        required: false
     depends_on:
       - core
     mem_limit: 512m

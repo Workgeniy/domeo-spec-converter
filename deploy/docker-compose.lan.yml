@@ -1,0 +1,38 @@
+# Локальный оверлей: поднимает стенд в локальную сеть и добавляет PostgreSQL для истории КП,
+# рабочих объектов и архива исходников. Только для локального запуска — на ВМ не едет
+# (deploy.sh копирует туда лишь docker-compose.yml и nginx.conf). Значения — из deploy/.env.
+#
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.lan.yml --env-file deploy/.env up -d
+#
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    # Порт наружу не публикуем — БД доступна только изнутри сети compose.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  api:
+    # Строка подключения к локальному PostgreSQL (сервис db в той же сети compose).
+    environment:
+      ConnectionStrings__Quotations: ${QUOTATIONS_CONNECTION}
+    depends_on:
+      core:
+        condition: service_started
+      db:
+        condition: service_healthy
+
+volumes:
+  db_data:

@@ -45,7 +45,9 @@ interface FlatRow {
 }
 
 function lookupItem(id: string, row: SummaryRow, params: SearchParam[] = row.search_params ?? []): MatchRequestItem {
-  return { id, name: row.name, description: row.description, unit: row.unit, section: row.section, search_params: params, type_mark: row.type_mark }
+  // Картинку из интернета просим, только когда своей из файла нет (аналог из прошлого поиска не в счёт).
+  const wantImage = !(row.image && row.image_origin !== 'internet')
+  return { id, name: row.name, description: row.description, unit: row.unit, section: row.section, search_params: params, type_mark: row.type_mark, want_image: wantImage }
 }
 
 /** Цену ещё не искали, поиск упал или параметры оператора поменяли после поиска. */
@@ -69,6 +71,11 @@ export function CostPanel({ onDownload, downloading }: Props) {
   const [matching, setMatching] = useState(false)
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
   const cancelRef = useRef(false)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false; cancelRef.current = true }
+  }, [])
   const [filter, setFilter] = useState('')
   const [mode, setMode] = useState<Mode>('all')
   const [page, setPage] = useState(1)
@@ -157,7 +164,7 @@ export function CostPanel({ onDownload, downloading }: Props) {
       for (let i = 0; i < items.length; i += 500) {
         Object.assign(merged, await matchHistory(items.slice(i, i + 500)))
       }
-      applyMatches(merged)
+      if (mounted.current) applyMatches(merged)
     } catch (e) {
       notifications.show({ color: 'red', title: 'Сопоставление не удалось', message: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -189,6 +196,7 @@ export function CostPanel({ onDownload, downloading }: Props) {
           batch.map((r) => lookupItem(r.id, r.row)),
           scope === 'all',
         )
+        if (!mounted.current) return
         applyInternet(lookups)
         searches += Object.values(lookups).reduce((n, l) => n + (l.searches ?? 0), 0)
         setProgress({ done: Math.min(i + batch.length, targets.length), total: targets.length })
@@ -220,6 +228,7 @@ export function CostPanel({ onDownload, downloading }: Props) {
     setSearchingIds((ids) => new Set(ids).add(target.id))
     try {
       const lookups = await lookupInternet([lookupItem(target.id, target.row, params)], true)
+      if (!mounted.current) return
       applyInternet(lookups)
       const found = lookups[target.id]
       notifications.show({
@@ -252,11 +261,11 @@ export function CostPanel({ onDownload, downloading }: Props) {
   // Долгий поиск виден по прогрессу и останавливается кнопкой; найденное кэшируется.
   const autoRan = useRef(false)
   useEffect(() => {
-    if (autoRan.current || priceList === undefined || internet === undefined || rows.length === 0) return
+    if (useWorkspace.getState().cloud.revision || useWorkspace.getState().quotationId || autoRan.current || priceList === undefined || internet === undefined || rows.length === 0) return
     autoRan.current = true
     void (async () => {
       if (priceList && rows.some((r) => !r.row.history)) await matchAll()
-      if (internet?.configured && missingInternet.length > 0) await searchInternet('missing')
+      if (mounted.current && internet?.configured && missingInternet.length > 0) await searchInternet('missing')
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [priceList, internet, rows.length])

@@ -2,15 +2,20 @@ import { Alert, Group, List, Progress, Stack, Text, rem } from '@mantine/core'
 import { Dropzone, MIME_TYPES, PDF_MIME_TYPE } from '@mantine/dropzone'
 import { IconFileImport, IconInfoCircle, IconUpload, IconX } from '@tabler/icons-react'
 import { useEffect, useState } from 'react'
+import { notifications } from '@mantine/notifications'
+import type { OriginalFile } from '../originals'
+import { uploadedOriginal } from '../uploads'
+import { useWorkspace } from '../store'
+import { useTemplates } from '../templates'
 
-import { getHealth, parseDocument, type ParsedDocument } from '../api'
+import { getHealth, uploadSource, parseUpload, type ParsedDocument } from '../api'
 
 // Том спецификации принимаем и PDF, и Excel — таблица от проектировщика бывает сразу в xlsx.
 const XLSM_MIME = 'application/vnd.ms-excel.sheet.macroEnabled.12'
 const ACCEPT = [...PDF_MIME_TYPE, MIME_TYPES.xlsx, XLSM_MIME]
 
 interface Props {
-  onParsed: (doc: ParsedDocument) => void
+  onParsed: (doc: ParsedDocument, original?: OriginalFile) => void
   /** Компактный вид — для добавления томов к уже открытому объекту. */
   compact?: boolean
 }
@@ -45,19 +50,36 @@ export function UploadPane({ onParsed, compact = false }: Props) {
   // отдаются разом в конце: иначе после первого тома эта панель исчезнет вместе с прогрессом.
   async function handleDrop(files: File[]) {
     setErrors([])
+    const state = useWorkspace.getState()
     const failed: string[] = []
-    const parsed: ParsedDocument[] = []
+    const parsed: { doc: ParsedDocument; original?: OriginalFile }[] = []
     for (const [i, file] of files.entries()) {
       setProgress({ done: i, total: files.length, current: file.name })
       try {
-        parsed.push(await parseDocument(file))
+        const saved = await uploadSource(file, state.projectId, state.title)
+        let doc: ParsedDocument
+        try {
+          const result = await parseUpload(saved.id)
+          if (!result.document) throw new Error('Нет результата разбора.')
+          doc = result.document
+        } catch (e) {
+          throw new Error(`Оригинал сохранён в «Документы». Разбор не завершён: ${e instanceof Error ? e.message : String(e)}`)
+        }
+        const original = await uploadedOriginal(saved, doc, false, file)
+        parsed.push({ doc, original })
       } catch (e) {
         failed.push(`${file.name}: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
     setProgress(null)
     setErrors(failed)
-    parsed.forEach(onParsed)
+    if (failed.length && parsed.length) notifications.show({ color: 'orange', title: 'Не все файлы разобраны', message: failed.join('\n'), autoClose: false })
+    if (useWorkspace.getState().projectId === state.projectId) {
+      const templateId = parsed.find((d) => d.original?.templateId)?.original?.templateId
+      if (!compact && templateId) useTemplates.getState().select(templateId)
+      parsed.forEach(({ doc, original }) => onParsed(doc, original))
+    }
+    else notifications.show({ title: 'Файлы сохранены', message: 'Найти загруженные файлы можно в разделе «Документы».' })
   }
 
   const busy = progress !== null
@@ -90,10 +112,12 @@ export function UploadPane({ onParsed, compact = false }: Props) {
         </Group>
       </Dropzone>
 
+      <Text size="xs" c="dimmed">Оригиналы PDF и Excel автоматически сохраняются в общей базе до разбора, даже без формирования КП. Найти их можно в разделе «Документы».</Text>
+
       {progress && (
         <Stack gap={4}>
           <Text size="sm">
-            Разбираем {progress.current}
+            Сохраняем и разбираем {progress.current}
             {progress.total > 1 && ` (${progress.done + 1} из ${progress.total})`}…
           </Text>
           <Progress value={progress.total > 1 ? (progress.done / progress.total) * 100 : 100} animated />
@@ -102,7 +126,7 @@ export function UploadPane({ onParsed, compact = false }: Props) {
 
       {engineDown && (
         <Alert color="orange" title="Ядро разбора не отвечает" icon={<IconX size={18} />}>
-          API работает, но Python-сервис разбора (порт 8000) недоступен — загрузка завершится ошибкой, пока он не поднят.
+          Исходный файл сохранится в базе. Разбор можно будет повторить из раздела «Документы», когда Python-сервис станет доступен.
         </Alert>
       )}
 

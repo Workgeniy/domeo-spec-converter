@@ -184,6 +184,12 @@ public sealed class FakePricing : IPricingEngine
 
 public sealed class FakeEngine : IParsingEngine
 {
+    public Task<DrawingText> ExtractDrawingTextAsync(Stream pdf, string pages, CancellationToken ct)
+    {
+        if (Down) throw new ServiceUnavailableException("Ядро разбора недоступно.");
+        return Task.FromResult(new DrawingText { Pages = [new DrawingPage { Number = 1,
+            Lines = [new DrawingLine { Text = "2.10 = 26", X = 100, Y = 50 }] }] });
+    }
     public bool Down { get; set; }
     public ParsedDocument? LastExported { get; private set; }
 

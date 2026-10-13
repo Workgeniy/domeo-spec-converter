@@ -19,6 +19,8 @@ export interface SpecItem {
   note: string
   group: string
   source_doc: string
+  /** Миниатюра товара (data-URI) из встроенной в xlsx картинки. */
+  image: string
   warnings: string[]
 }
 
@@ -101,6 +103,8 @@ export interface InternetLookup {
   searches: number
   /** С какими параметрами оператора искали. */
   params: SearchParam[]
+  /** Миниатюра товара (data-URI) со страницы лучшего предложения — если её просили. */
+  image: string
 }
 
 /** Откуда взята базовая цена позиции. */
@@ -134,6 +138,10 @@ export interface SummaryItem {
   /** Подлежит монтажу/пусконаладке → лист «1» (Приложение №1.1), иначе инвентарь → лист «2». */
   installation: boolean
   source_doc: string
+  /** Миниатюра товара (data-URI) — из встроенной картинки файла или из интернета. */
+  image: string
+  /** Откуда картинка: 'file' (из спецификации) или 'internet' (со страницы предложения). */
+  image_origin: string
   groups: GroupQty[]
   item_ids: number[]
   warnings: string[]
@@ -170,6 +178,7 @@ export interface KpSettings {
   supplier_position: string
   customer_position: string
   vat_rate: number
+  margin_percent: number | null
   markup_percent: number
   /** Доставка — входит в цену товара. */
   delivery_percent: number
@@ -190,6 +199,8 @@ export interface ParsedDocument {
   documents: SourceDocument[]
   /** Только в запросе на выгрузку: параметры КП. */
   kp?: KpSettings | null
+  /** Excel-шаблон в base64; передаётся только при выгрузке КП. */
+  kp_template?: string | null
   /** Только в запросе на выгрузку: working — рабочая, kp — приложения к договору, cost — себестоимость. */
   kind?: ExportKind
   /** Только в запросе на выгрузку: индексация цен к дате поставки. */
@@ -197,6 +208,18 @@ export interface ParsedDocument {
 }
 
 export type ExportKind = 'working' | 'kp' | 'cost'
+
+export interface DrawingHit { page: number; text: string; x: number; y: number; count: number }
+export interface DrawingCheckRow { pos: string; name: string; expected: number | null; unit: string; found: number; status: string; hits: DrawingHit[] }
+export interface DrawingCheckResult { rows: DrawingCheckRow[]; unknown_labels: string[]; warnings: string[] }
+
+export function checkDrawing(file: File, pages: string, items: SummaryItem[]): Promise<DrawingCheckResult> {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('pages', pages)
+  form.append('items', JSON.stringify(items.map(({ pos, name, qty, unit }) => ({ pos, name, qty, unit }))))
+  return fetch('/api/specifications/check-drawing', { method: 'POST', body: form }).then((r) => readData<DrawingCheckResult>(r))
+}
 
 /** Сводка по загруженному прайсу закупки. */
 export interface PriceListInfo {
@@ -223,6 +246,8 @@ export interface MatchRequestItem {
   search_params?: SearchParam[]
   /** Графа «Тип, марка»: «по типу Polair CM107-S» — эталонная модель для поиска. */
   type_mark?: string
+  /** Нужна ли картинка товара из интернета (когда своей из файла нет). */
+  want_image?: boolean
 }
 
 /** Состояние поиска цен в интернете: настроен ли, чем ищем (claude | suppliers | fake), сколько в кэше. */
@@ -315,6 +340,7 @@ export interface IndexationInfo {
 export interface Indexation {
   date: string
   rates: Record<string, number>
+  base_date?: string
   apply_to_kp: boolean
 }
 
@@ -354,10 +380,37 @@ async function readError(response: Response): Promise<string> {
   return `Ошибка ${response.status}`
 }
 
-async function readData<T>(response: Response): Promise<T> {
-  if (!response.ok) throw new Error(await readError(response))
+export async function readData<T>(response: Response): Promise<T> {
+  if (!response.ok) throw new ApiError(response.status, await readError(response))
   const body = (await response.json()) as ApiResponse<T>
   return body.data
+}
+
+export class ApiError extends Error {
+  status: number
+  constructor(status: number, message: string) { super(message); this.status = status }
+}
+
+/** Рабочие объекты: текущий снимок изменяемый, версии КП хранятся отдельно. */
+export interface ProjectInfo {
+  id: string; revision: number; updated_at: string; title: string
+  documents: number; positions: number; margin_percent: number | null; quotation_id: string | null
+}
+export interface ProjectDetail { info: ProjectInfo; snapshot: import('./quotations').Snapshot }
+export interface SaveProject {
+  expected_revision: number; mutation_id: string; snapshot: import('./quotations').Snapshot; quotation_id: string | null
+}
+export function listProjects(search: string, offset: number): Promise<ProjectInfo[]> {
+  return fetch(`/api/specifications/projects?${new URLSearchParams({ search, offset: String(offset), limit: '31' })}`).then(readData<ProjectInfo[]>)
+}
+export function getProject(id: string): Promise<ProjectDetail> {
+  return fetch(`/api/specifications/projects/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(45000) }).then(readData<ProjectDetail>)
+}
+export function putProject(id: string, body: SaveProject): Promise<ProjectInfo> {
+  const json = JSON.stringify(body)
+  if (new Blob([json]).size > 95 * 1024 * 1024) throw new Error('Объект превышает лимит сохранения 95 МБ. Разделите его на несколько объектов.')
+  return fetch(`/api/specifications/projects/${encodeURIComponent(id)}`, { method: 'PUT',
+    headers: { 'Content-Type': 'application/json' }, body: json, signal: AbortSignal.timeout(45000) }).then(readData<ProjectInfo>)
 }
 
 // Под /api/specifications/, а не /api/health: на общем домене (testdesign…/spec/) край отдаёт
@@ -473,4 +526,28 @@ export async function exportExcel(doc: ParsedDocument): Promise<{ blob: Blob; fi
   const match = /filename\*=UTF-8''([^;]+)/.exec(disposition)
   const fileName = match ? decodeURIComponent(match[1]) : 'спецификация.xlsx'
   return { blob: await r.blob(), fileName }
+}
+
+
+/** Оригинал спецификации в общей БД; сохраняется до запуска разбора. */
+export interface UploadInfo {
+  id: string; project_id: string; created_at: string; file_name: string; title: string
+  size: number; sha256: string; parsed: boolean; error: string | null
+}
+export interface UploadDetail { info: UploadInfo; document: ParsedDocument | null }
+export function uploadSource(file: File, projectId: string, title: string): Promise<UploadInfo> {
+  const form = new FormData()
+  form.append('file', file); form.append('projectId', projectId); form.append('title', title)
+  return fetch('/api/specifications/uploads', { method: 'POST', body: form }).then(readData<UploadInfo>)
+}
+export function parseUpload(id: string): Promise<UploadDetail> {
+  return fetch(`/api/specifications/uploads/${encodeURIComponent(id)}/parse`, { method: 'POST' }).then(readData<UploadDetail>)
+}
+export function listUploads(search: string, offset: number): Promise<UploadInfo[]> {
+  return fetch(`/api/specifications/uploads?${new URLSearchParams({ search, offset: String(offset), limit: '31' })}`).then(readData<UploadInfo[]>)
+}
+export async function downloadUpload(id: string): Promise<Blob> {
+  const r = await fetch(`/api/specifications/uploads/${encodeURIComponent(id)}/file`)
+  if (!r.ok) throw new Error(await readError(r))
+  return r.blob()
 }

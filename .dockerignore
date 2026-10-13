@@ -1,5 +1,6 @@
 # Контекст сборки api/Dockerfile — корень репозитория; лишнее не отправляем в docker.
 .git/
+**/appsettings.Local.json
 docs/
 core/
 deploy/

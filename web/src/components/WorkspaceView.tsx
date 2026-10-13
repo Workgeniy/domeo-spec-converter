@@ -1,23 +1,28 @@
 import { ActionIcon, Badge, Button, Collapse, Group, Menu, Paper, Stack, Tabs, Text, TextInput, Tooltip } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import { IconChevronDown, IconDownload, IconPlus, IconTrash, IconX } from '@tabler/icons-react'
-import { useMemo, useState } from 'react'
+import { IconChevronDown, IconDownload, IconPlus, IconX } from '@tabler/icons-react'
+import { useMemo, useRef, useState } from 'react'
 
 import { exportExcel, type ExportKind } from '../api'
 import { crossVolumeDuplicates } from '../duplicates'
 import { buildExportRequest, downloadBlob } from '../export'
 import { kpTotals } from '../kp'
+import { saveQuotation, downloadQuotation } from '../quotations'
 import { useWorkspace, type WorkspaceDocument } from '../store'
+import { closeProject, flushProject } from '../projects'
 import { CheckTable } from './CheckTable'
 import { CostPanel } from './CostPanel'
 import { DetailTable } from './DetailTable'
+import { DrawingPanel } from './DrawingPanel'
 import { formatMoney } from './format'
 import { KpPanel } from './KpPanel'
 import { SummaryTable } from './SummaryTable'
 import { UploadPane } from './UploadPane'
 
 export function WorkspaceView() {
-  const { title, documents, kp, indexation, setTitle, addDocument, removeDocument, clear } = useWorkspace()
+  const { title, documents, kp, indexation, setTitle, addDocument, removeDocument } = useWorkspace()
+  const saving = useRef(false)
+  const quotationId = useWorkspace((s) => s.quotationId)
   const [adding, setAdding] = useState(false)
   const [downloading, setDownloading] = useState(false)
 
@@ -43,19 +48,31 @@ export function WorkspaceView() {
   // kp — приложения к договору по образцу (листы «1» и «2»); cost — себестоимость для Домео;
   // working — рабочая выгрузка (свод, по помещениям, проверка).
   async function download(docs: WorkspaceDocument[], kind: ExportKind = 'kp') {
+    if (saving.current) return
+    saving.current = true
     setDownloading(true)
     try {
-      const { blob, fileName } = await exportExcel(buildExportRequest(title, docs, kp, kind, indexation))
-      downloadBlob(blob, fileName)
+      if (kind === 'kp') {
+        const saved = await saveQuotation(docs)
+        notifications.show({ color: 'green', title: 'КП сохранено в истории', message: 'Эту версию можно открыть или скачать позднее.' })
+        // Excel уже сохранён в истории. Ошибка обновления рабочего объекта видна в CloudStatus.
+        await flushProject().catch(() => {})
+        downloadBlob(await downloadQuotation(saved), saved.file_name)
+      } else {
+        const { blob, fileName } = await exportExcel(buildExportRequest(title, docs, kp, kind, indexation))
+        downloadBlob(blob, fileName)
+      }
     } catch (e) {
       notifications.show({ color: 'red', title: 'Не удалось сформировать Excel', message: e instanceof Error ? e.message : String(e) })
     } finally {
+      saving.current = false
       setDownloading(false)
     }
   }
 
-  function reset() {
-    if (window.confirm('Закрыть объект? Загруженные документы и правки будут удалены из браузера.')) clear()
+  async function reset() {
+    try { await closeProject() }
+    catch (e) { notifications.show({ color: 'red', title: 'Объект остаётся открыт', message: e instanceof Error ? e.message : String(e) }) }
   }
 
   return (
@@ -63,6 +80,7 @@ export function WorkspaceView() {
       <Paper withBorder p="md">
         <Group justify="space-between" align="flex-start" wrap="wrap">
           <Stack gap={6} style={{ flex: 1, minWidth: 320 }}>
+            {quotationId && <Text size="xs" c="dimmed">Версия в истории: {quotationId.slice(0, 8)}. Рабочие правки сохраняются автоматически. Этот Excel в истории не меняется.</Text>}
             <TextInput
               variant="unstyled"
               size="lg"
@@ -113,12 +131,12 @@ export function WorkspaceView() {
             </Group>
           </Stack>
           <Group>
-            <Button variant="default" color="red" leftSection={<IconTrash size={16} />} onClick={reset}>
+            <Button variant="default" onClick={reset}>
               Закрыть объект
             </Button>
             <Menu shadow="md" width={360}>
               <Menu.Target>
-                <Button leftSection={<IconDownload size={16} />} rightSection={<IconChevronDown size={14} />} loading={downloading}>
+                <Button leftSection={<IconDownload size={16} />} rightSection={<IconChevronDown size={14} />} loading={downloading} disabled={!documents.length}>
                   Сформировать КП (Excel)
                 </Button>
               </Menu.Target>
@@ -147,8 +165,8 @@ export function WorkspaceView() {
           <div style={{ marginTop: 12 }}>
             <UploadPane
               compact
-              onParsed={(doc) => {
-                addDocument(doc)
+              onParsed={(doc, original) => {
+                addDocument(doc, original)
                 setAdding(false)
               }}
             />
@@ -164,6 +182,7 @@ export function WorkspaceView() {
             Формирование КП
           </Tabs.Tab>
           <Tabs.Tab value="detail">По помещениям ({stats.items})</Tabs.Tab>
+          <Tabs.Tab value="drawing">Сверка с планом</Tabs.Tab>
           <Tabs.Tab value="check" rightSection={duplicateGroups > 0 ? <Badge size="xs" color="orange" circle>{duplicateGroups}</Badge> : undefined}>
             Проверка ({stats.warnings})
           </Tabs.Tab>
@@ -179,6 +198,9 @@ export function WorkspaceView() {
         </Tabs.Panel>
         <Tabs.Panel value="detail" pt="md">
           <DetailTable />
+        </Tabs.Panel>
+        <Tabs.Panel value="drawing" pt="md">
+          <DrawingPanel />
         </Tabs.Panel>
         <Tabs.Panel value="check" pt="md">
           <CheckTable />

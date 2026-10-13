@@ -31,6 +31,10 @@ public static class DependencyInjection
             client.BaseAddress = baseUri;
             client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds);
         });
+        services.AddSingleton<DomeoSpec.Infrastructure.Quotations.PostgresQuotationStore>();
+        services.AddSingleton<DomeoSpec.Application.Quotations.IQuotationStore>(s => s.GetRequiredService<DomeoSpec.Infrastructure.Quotations.PostgresQuotationStore>());
+        services.AddSingleton<DomeoSpec.Application.Quotations.IProjectStore>(s => s.GetRequiredService<DomeoSpec.Infrastructure.Quotations.PostgresQuotationStore>());
+        services.AddSingleton<DomeoSpec.Application.Uploads.IUploadStore>(s => s.GetRequiredService<DomeoSpec.Infrastructure.Quotations.PostgresQuotationStore>());
         return services;
     }
 }
