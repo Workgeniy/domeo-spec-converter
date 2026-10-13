@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import base64
 import io
 import re
 from pathlib import Path
@@ -23,7 +24,7 @@ from .spec_parser import DOC_CODE_RE, TITLE_RE, _default_section, normalize_pos,
 # важен: «Наименование помещения» — это раздел, а не наименование, поэтому раздел ищем раньше.
 COLUMN_HINTS: list[tuple[str, tuple[str, ...]]] = [
     ("pos", ("поз", "№")),
-    ("qty", ("кол", "кол-во", "колво", "колич")),  # «Кол», «Кол-во», «Количество»
+    ("qty", ("кол", "кол-во", "колво", "колич", "объём", "объем")),  # «Кол»/«Количество»; «Объём»/«Объем» — в формах КП и сметах
     ("unit", ("ед.", "ед ", "единиц", "ед-ц")),
     ("mass", ("масса", "вес")),
     ("code", ("код",)),
@@ -42,6 +43,7 @@ COLUMN_HINTS: list[tuple[str, tuple[str, ...]]] = [
 REQUIRED = ("name", "qty")  # без них лист не считаем спецификацией
 HEADER_SCAN_ROWS = 60
 MAX_HEADER_COLS = 60  # шире — вряд ли спецификация, не перебираем лишнее
+_HAS_LETTER = re.compile(r"[A-Za-zА-Яа-яЁё]")  # наименование товара всегда со словами, не из одних цифр
 
 
 def _text(value: object) -> str:
@@ -75,12 +77,19 @@ def _match_header(cells: list[str]) -> dict[str, int] | None:
     mapping: dict[str, int] = {}
     used: set[int] = set()
     for key, hints in COLUMN_HINTS:
-        for i, cell in enumerate(lower):
+        indices = sorted(range(len(lower)), key=lambda i: 0 if key == "pos" and "поз" in lower[i] else 1)
+        for i in indices:
+            cell = lower[i]
             if i in used or not cell:
                 continue
             if any(h in cell for h in hints):
                 mapping[key] = i
                 used.add(i)
+                break
+    if "pos" in mapping and "поз" in lower[mapping["pos"]]:
+        for i, label in enumerate(lower):
+            if i not in used and re.sub(r"\s+", "", label) in {"№", "№п/п"}:
+                mapping["ordinal"] = i  # признак отдельной строки, но не номер позиции в проекте
                 break
     return mapping if all(k in mapping for k in REQUIRED) else None
 
@@ -150,19 +159,32 @@ def parse_xlsx(source: str | Path | bytes, file_name: str | None = None) -> Pars
     # data_only=True берёт посчитанные значения формул; объединения разворачиваем сами,
     # поэтому read_only не используем (в нём merged_cells.ranges недоступны).
     wb = load_workbook(handle, read_only=False, data_only=True)
+    # При повторной загрузке рабочей выгрузки её свод и детализация — два представления
+    # одних товаров. Узнаём их по структуре заголовков, а не по имени файла/проектировщику.
+    def header_labels(ws):
+        return [{re.sub(r"[^а-яa-z0-9]", "", _text(v).lower()) for v in row}
+                for row in ws.iter_rows(max_row=min(ws.max_row, HEADER_SCAN_ROWS), values_only=True)]
+    headers = {ws.title: header_labels(ws) for ws in wb.worksheets}
+    has_priced_summary = any({"наименование", "колво"} <= labels and
+        any(label.startswith("ценазаед") for label in labels)
+        for sheet_headers in headers.values() for labels in sheet_headers)
     result = ParsedDocument(file_name=name)
     items: list[SpecItem] = []
     razdel_by_id: dict[int, str] = {}  # id позиции → раздел КП из столбца «Раздел»
     pre_header_text: list[str] = []
 
     for ws in wb.worksheets:
+        if has_priced_summary and any({"документ", "помещениераздел", "замечанияразбора", "стрpdf"} <= labels
+                                     for labels in headers[ws.title]):
+            result.warnings.append(f"Лист «{ws.title}» пропущен: детализация свода, чтобы не задвоить товары.")
+            continue
         grid, filled = _expand_merges(ws)
         found = _find_header(grid)
         if found is None:
             continue
         header_row, mapping = found
         pre_header_text += [_text(v) for row in grid[:header_row] for v in row if _text(v)]
-        sheet_items, sheet_sections = _rows_to_items(grid, filled, header_row + 1, mapping, len(items))
+        sheet_items, sheet_sections = _rows_to_items(grid, filled, header_row + 1, mapping, len(items), _row_images(ws))
         items.extend(sheet_items)
         razdel_by_id.update(sheet_sections)
         result.pages.append(PageInfo(number=len(result.pages) + 1, kind="spec", source="xlsx", rows=len(sheet_items)))
@@ -185,8 +207,41 @@ def parse_xlsx(source: str | Path | bytes, file_name: str | None = None) -> Pars
     return result
 
 
+IMAGE_THUMB_PX = 240  # миниатюра товара: хватает и для карточки в приложении, и для вставки в КП
+MAX_SHEET_IMAGES = 3000  # защита от аномально тяжёлых книг
+
+
+def _row_images(ws) -> dict[int, str]:
+    """{индекс строки листа (0-based) -> миниатюра товара как data-URI}. Берём первую (самую
+    левую) картинку строки — обычно «ИЗОБРАЖЕНИЕ 1». Сбой на одной картинке разбор не роняет."""
+    result: dict[int, str] = {}
+    images = list(getattr(ws, "_images", []) or [])[:MAX_SHEET_IMAGES]
+    for img in sorted(images, key=lambda im: getattr(getattr(im.anchor, "_from", None), "col", 1 << 30)):
+        frm = getattr(getattr(img, "anchor", None), "_from", None)
+        if frm is None or frm.row in result:
+            continue
+        thumb = _thumbnail(img)
+        if thumb:
+            result[frm.row] = thumb
+    return result
+
+
+def _thumbnail(img) -> str:
+    try:
+        from PIL import Image  # Pillow в зависимостях; при отсутствии — просто без картинок
+
+        im = Image.open(io.BytesIO(img._data()))
+        im.thumbnail((IMAGE_THUMB_PX, IMAGE_THUMB_PX))
+        buf = io.BytesIO()
+        im.convert("RGB").save(buf, "JPEG", quality=75)
+        return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:  # noqa: BLE001 — картинки не критичны для разбора
+        return ""
+
+
 def _rows_to_items(
-    grid: list[list[object]], filled: set[tuple[int, int]], start: int, mapping: dict[str, int], next_id: int
+    grid: list[list[object]], filled: set[tuple[int, int]], start: int, mapping: dict[str, int], next_id: int,
+    row_images: dict[int, str] | None = None,
 ) -> tuple[list[SpecItem], dict[int, str]]:
     """Позиция начинается со строки с собственным (не унаследованным из объединения) номером
     или количеством. Характеристики берутся из столбца «Технические характеристики» (если он
@@ -203,13 +258,24 @@ def _rows_to_items(
         razdel = _cell(row, mapping, "razdel")  # столбец «Раздел», если он есть
         own_pos = _own(grid, filled, r, mapping, "pos")
         own_qty = _own(grid, filled, r, mapping, "qty")
-        if own_pos or own_qty:  # собственный номер/количество — это новая позиция
+        own_ordinal = _own(grid, filled, r, mapping, "ordinal")
+        if own_pos or own_qty or own_ordinal:  # порядковый номер сохраняет строки с пропущенными позицией/количеством
             pos = own_pos
             qty_raw = own_qty or _cell(row, mapping, "qty")  # количество может быть общим на группу (объединение)
             specs = _cell(row, mapping, "specs")
-            # Строка с одним номером и пустыми наименованием/ед./кол — зарезервированный номер
-            # (в перечнях нумерация с пропусками), а не позиция.
-            if not name and not specs and not _cell(row, mapping, "type_mark") and not _cell(row, mapping, "unit") and parse_qty(qty_raw) is None:
+            # Строка-нумерация столбцов под шапкой («1 2 3 … 10») — наименование из одних цифр,
+            # не позиция.
+            if name and not _HAS_LETTER.search(name):
+                current = None
+                continue
+            # Строка без полезных данных: нет характеристик, марки, единицы и количества.
+            empty_payload = (not specs and not _cell(row, mapping, "type_mark")
+                             and not _cell(row, mapping, "unit") and parse_qty(qty_raw) is None)
+            # Такую строку пропускаем, если это либо голый номер без наименования
+            # (зарезервированный номер / служебная строка выгрузки), либо заголовок раздела,
+            # пронумерованный как позиция, но не порядковым номером (в перечнях, формах КП и
+            # сметах так нумеруют разделы). Строку с порядковым номером (own_ordinal) не теряем.
+            if empty_payload and (not name or (own_pos and not own_ordinal)):
                 current = None
                 continue
             current = SpecItem(
@@ -227,6 +293,7 @@ def _rows_to_items(
                 mass=_cell(row, mapping, "mass"),
                 note=_cell(row, mapping, "note"),
                 group=room or group,
+                image=(row_images or {}).get(r, ""),  # встроенная картинка товара из этой строки
             )
             current.qty = parse_qty(qty_raw)
             if current.qty is None:
@@ -253,6 +320,8 @@ def _rows_to_items(
             extra_mfr = _cell(row, mapping, "manufacturer")
             if extra_mfr and extra_mfr.lower() not in current.manufacturer.lower():
                 current.manufacturer = f"{current.manufacturer} {extra_mfr}".strip()
+            if not current.image and row_images and row_images.get(r):  # картинка на строке-продолжении
+                current.image = row_images[r]
         elif room or _looks_like_section(name):
             group, current = (room or name), None  # заголовок помещения
         else:

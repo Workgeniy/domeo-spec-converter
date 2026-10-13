@@ -21,6 +21,8 @@ public sealed record ParsedDocument
     public IReadOnlyList<SourceDocument> Documents { get; init; } = [];
     /// <summary>Параметры КП для выгрузки; null — просто спецификация без листа «КП».</summary>
     public KpSettings? Kp { get; init; }
+    /// <summary>Выбранный Excel-шаблон КП в base64; null — стандартная форма.</summary>
+    public string? KpTemplate { get; init; }
     /// <summary>Вид выгрузки: working, kp или cost (себестоимость); null — kp при наличии параметров, иначе working.</summary>
     public string? Kind { get; init; }
     /// <summary>Только в запросе на выгрузку: индексация цен к дате поставки.</summary>
@@ -104,6 +106,8 @@ public sealed record InternetLookup
     public int Searches { get; init; }
     /// <summary>С какими параметрами оператора искали.</summary>
     public IReadOnlyList<SearchParam> Params { get; init; } = [];
+    /// <summary>Миниатюра товара (data-URI) со страницы лучшего предложения — если её просили.</summary>
+    public string Image { get; init; } = "";
 }
 
 /// <summary>Сводка по загруженному прайсу закупки.</summary>
@@ -126,6 +130,8 @@ public sealed record MatchRequestItem(string Id, string Name, string Description
     public IReadOnlyList<SearchParam> SearchParams { get; init; } = [];
     /// <summary>Графа «Тип, марка»: «по типу Polair CM107-S» — эталонная модель для поиска.</summary>
     public string TypeMark { get; init; } = "";
+    /// <summary>Нужна ли картинка товара из интернета (когда своей из файла нет).</summary>
+    public bool WantImage { get; init; }
 }
 
 /// <summary>Изменение цен одних и тех же позиций между двумя годами.</summary>
@@ -178,6 +184,7 @@ public sealed record IndexationInfo
 /// <summary>Индексация в выгрузке: дата поставки и ставки по разделам (ключ «» — по умолчанию).</summary>
 public sealed record Indexation
 {
+    public string BaseDate { get; init; } = "";
     public string Date { get; init; } = "";
     public IReadOnlyDictionary<string, double> Rates { get; init; } = new Dictionary<string, double>();
     public bool ApplyToKp { get; init; }
@@ -266,6 +273,8 @@ public sealed record KpSettings
     public string CustomerPosition { get; init; } = "Генеральный директор";
     public double VatRate { get; init; } = 0.22;
     public double MarkupPercent { get; init; }
+    /// <summary>Целевая маржа товара с доставкой, 0..99.99%; null — прежний режим наценки.</summary>
+    public double? MarginPercent { get; init; }
     public double DeliveryPercent { get; init; }
     public double InstallationPercent { get; init; }
     public bool RoundToRuble { get; init; }
@@ -312,12 +321,16 @@ public sealed record SpecItem
     public string Group { get; init; } = "";
     /// <summary>Шифр документа-источника.</summary>
     public string SourceDoc { get; init; } = "";
+    /// <summary>Миниатюра товара (data-URI) из встроенной в xlsx картинки, если была.</summary>
+    public string Image { get; init; } = "";
     public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
 /// <summary>Позиция, сведённая по всему документу (одна строка на позицию).</summary>
 public sealed record SummaryItem
 {
+    /// <summary>Пометка рабочего снимка; в сформированном КП таких строк нет.</summary>
+    public bool Excluded { get; init; }
     public string Pos { get; init; } = "";
     public string PosKey { get; init; } = "";
     public string Name { get; init; } = "";
@@ -346,6 +359,10 @@ public sealed record SummaryItem
     /// <summary>Подлежит монтажу/пусконаладке → лист «1» (Приложение №1.1), иначе инвентарь → лист «2».</summary>
     public bool Installation { get; init; } = true;
     public string SourceDoc { get; init; } = "";
+    /// <summary>Миниатюра товара (data-URI) — из встроенной картинки файла или из интернета.</summary>
+    public string Image { get; init; } = "";
+    /// <summary>Откуда картинка: «file» (из спецификации) или «internet» (со страницы предложения).</summary>
+    public string ImageOrigin { get; init; } = "";
     public IReadOnlyList<GroupQty> Groups { get; init; } = [];
     public IReadOnlyList<int> ItemIds { get; init; } = [];
     public IReadOnlyList<string> Warnings { get; init; } = [];

@@ -85,6 +85,26 @@ export const SummaryRowView = memo(function SummaryRowView({ number, row, rowKey
         />
       </Table.Td>
       <Table.Td>
+        {row.image && (
+          <HoverCard width={260} shadow="md" withArrow openDelay={120} position="right">
+            <HoverCard.Target>
+              <img
+                src={row.image}
+                alt=""
+                title={row.image_origin === 'internet' ? 'Картинка из интернета' : undefined}
+                style={{ width: 44, height: 44, objectFit: 'cover', borderRadius: 4, cursor: 'zoom-in', display: 'block', marginBottom: 4, border: `1px solid ${row.image_origin === 'internet' ? 'var(--mantine-color-blue-4)' : 'var(--mantine-color-gray-3)'}` }}
+              />
+            </HoverCard.Target>
+            <HoverCard.Dropdown>
+              <img src={row.image} alt={row.name} style={{ maxWidth: 240, maxHeight: 240, display: 'block', margin: '0 auto' }} />
+              {row.image_origin === 'internet' && (
+                <Text size="xs" c="dimmed" ta="center" mt={6}>
+                  картинка из интернета
+                </Text>
+              )}
+            </HoverCard.Dropdown>
+          </HoverCard>
+        )}
         <TextInput size="xs" variant="filled" value={row.name} onChange={(e) => onChange(rowKey, { name: e.currentTarget.value })} disabled={excluded} />
       </Table.Td>
       <Table.Td>

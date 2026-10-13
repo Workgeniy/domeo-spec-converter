@@ -15,6 +15,22 @@ def settings(**overrides) -> KpSettings:
     return KpSettings(**base)
 
 
+def test_appendix_gets_image_column_for_items_with_pictures() -> None:
+    import base64
+
+    from PIL import Image as PILImage
+
+    pic = io.BytesIO()
+    PILImage.new("RGB", (40, 30), (20, 120, 200)).save(pic, "JPEG")
+    uri = "data:image/jpeg;base64," + base64.b64encode(pic.getvalue()).decode("ascii")
+    wb = build_workbook(ExportRequest(summary=[SummaryItem(pos="1", name="Стол", description="Стол", unit="шт.", qty=2, image=uri)], items=[]))
+    buf = io.BytesIO()
+    wb.save(buf)
+    ws = load_workbook(io.BytesIO(buf.getvalue())).worksheets[0]
+    headers = [ws.cell(3, c).value for c in range(1, ws.max_column + 1)]
+    assert "Изображение" in headers and len(ws._images) == 1
+
+
 def test_price_row_applies_markup_delivery_and_installation() -> None:
     p = price_row(1000, settings())
     assert (p.sale, p.installation, p.unit_total) == (1100.0, 55.0, 1155.0)
@@ -99,3 +115,34 @@ def test_workbook_without_kp_is_working_export() -> None:
     assert ws["M4"].value == 10 and ws["K4"].value is None and ws["L4"].value == 0.22  # НДС по умолчанию 22 %
     assert ws["A5"].value == 2  # без параметров КП все позиции на одном листе
     assert ws["Q3"].value == "=N6" and ws["R4"].value is None  # без параметров нет и граф-подсказок
+
+
+def test_target_margin_replaces_markup_and_includes_delivery_cost():
+    p = price_row(100, settings(margin_percent=20, markup_percent=90, delivery_percent=10, installation_percent=5))
+    assert (p.sale, p.installation, p.unit_total) == (137.5, 6.88, 144.38)
+    assert price_row(100, settings(margin_percent=0, markup_percent=90)).sale == 100
+    assert price_row(100, settings(margin_percent=20), False).installation == 0
+    assert price_row(100, settings(margin_percent=20, round_to_ruble=True)).sale == 125
+
+
+def test_invalid_margin_rejected():
+    import pytest
+    from pydantic import ValidationError
+    for value in (-1, 100, 101, float('nan'), float('inf')):
+        with pytest.raises(ValidationError):
+            settings(margin_percent=value)
+
+
+def test_margin_workbook_and_frozen_indexation():
+    from app.models import Indexation
+    from app.export.kp import round_half_up
+    from app.pricing.indexation import indexation_factor
+    from datetime import date
+    data = ExportRequest(summary=[SummaryItem(name='Стол', price=100, qty=2)],
+        kp=settings(margin_percent=20, markup_percent=90, installation_percent=0),
+        indexation=Indexation(date='2021-01-01', base_date='2020-01-01', rates={'': 10}, apply_to_kp=True))
+    output = build_workbook(data)
+    base = round_half_up(100 * indexation_factor(10, date(2020, 1, 1), date(2021, 1, 1)), 2)
+    assert base == 110.02
+    assert output['1']['M4'].value == 137.53
+    assert output['1']['R4'].value == 25

@@ -26,6 +26,7 @@ class SpecItem(BaseModel):
     note: str = ""
     group: str = ""  # помещение или раздел, к которому относится строка
     source_doc: str = ""  # шифр документа-источника (важно, когда в выгрузке несколько томов)
+    image: str = ""  # миниатюра товара из файла (data-URI), если в xlsx была встроенная картинка
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -108,6 +109,7 @@ class InternetLookup(BaseModel):
     provider: str = ""
     searches: int = 0  # сколько поисковых запросов ушло (для оценки расходов)
     params: list[SearchParam] = Field(default_factory=list)  # с какими параметрами оператора искали
+    image: str = ""  # миниатюра товара (data-URI) со страницы лучшего предложения — если её просили
 
 
 # Откуда взята базовая цена позиции: выбор оператора.
@@ -139,6 +141,8 @@ class SummaryItem(BaseModel):
     # иначе инвентарь → лист «2» (Приложение №1.2).
     installation: bool = True
     source_doc: str = ""
+    image: str = ""  # миниатюра товара (data-URI) — из встроенной картинки файла или из интернета
+    image_origin: str = ""  # откуда картинка: «file» (из спецификации) или «internet» (со страницы предложения)
     groups: list[GroupQty] = Field(default_factory=list)
     item_ids: list[int] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
@@ -212,6 +216,7 @@ class KpSettings(BaseModel):
     supplier_position: str = "Генеральный директор"  # должность подписанта в блоке подписей
     customer_position: str = "Генеральный директор"
     vat_rate: float = 0.22  # 0 — без НДС
+    margin_percent: float | None = Field(default=None, ge=0, le=99.99, allow_inf_nan=False)
     markup_percent: float = 0.0  # наценка на базовую цену (графа-подсказка «пр» в образце)
     delivery_percent: float = 0.0  # доставка — входит в цену товара (графа «дост»)
     installation_percent: float = 0.0  # СМР от цены товара — только лист «1» (графа «монт»)
@@ -234,6 +239,7 @@ class ExportRequest(BaseModel):
     pages: list[PageInfo] = Field(default_factory=list)
     documents: list[SourceDocument] = Field(default_factory=list)
     kp: KpSettings | None = None
+    kp_template: str | None = Field(default=None, max_length=4_000_000)  # xlsx в base64, только для КП
     # working — рабочая выгрузка; kp — приложения к договору; cost — себестоимость для Домео.
     # Не задано: kp, если есть параметры КП, иначе working (совместимость со старыми клиентами).
     kind: ExportKind | None = None
@@ -270,6 +276,7 @@ class MatchRequestItem(BaseModel):
     section: str = ""  # раздел КП: прайсы того же раздела чуть надёжнее
     search_params: list[SearchParam] = Field(default_factory=list)  # для поиска в интернете: материал, цвет… от оператора
     type_mark: str = ""  # графа «Тип, марка»: «по типу Polair CM107-S» — эталонная модель для поиска
+    want_image: bool = False  # нужна ли картинка товара из интернета (когда своей из файла нет)
 
 
 class MatchRequest(BaseModel):
@@ -426,4 +433,5 @@ class Indexation(BaseModel):
 
     date: str = ""  # ГГГГ-ММ-ДД; пусто — без индексации
     rates: dict[str, float] = Field(default_factory=dict)
+    base_date: str = ""  # фиксируем дату расчёта в истории КП
     apply_to_kp: bool = False  # считать КП от проиндексированной базовой цены

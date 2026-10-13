@@ -73,6 +73,62 @@ def test_not_a_specification_sheet() -> None:
     assert any("не найдено" in w for w in doc.warnings)
 
 
+def test_working_export_reimport_does_not_double_quantities() -> None:
+    from app.export.excel import build_workbook
+    from app.models import ExportRequest, SpecItem, SummaryItem
+
+    wb = build_workbook(ExportRequest(
+        summary=[SummaryItem(pos='1', name='Стол', description='Стол', unit='шт.', qty=2)],
+        items=[SpecItem(id=1, page=1, pos='1', name='Стол', description='Стол', unit='шт.', qty=2)],
+    ))
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    document = parse_xlsx(buffer.getvalue())
+    assert len(document.items) == 1 and len(document.summary) == 1
+    assert document.summary[0].qty == 2
+    assert any('не задвоить' in warning for warning in document.warnings)
+
+
+def test_detail_sheet_without_summary_is_still_imported() -> None:
+    data = _book(['Документ', 'Помещение / раздел', 'Наименование', 'Кол-во', 'Стр. PDF', 'Замечания разбора'],
+                 [['ТХ', 'Комната', 'Стол', 2, 1, '']])
+    assert parse_xlsx(data).summary[0].qty == 2
+
+
+def test_position_column_has_priority_over_row_number() -> None:
+    data = _book(['№', 'Наименование', 'Кол-во', '№ поз. в ТХ'], [[1, 'Стол', 2, '7.124']])
+    assert parse_xlsx(data).summary[0].pos == '7.124'
+
+
+def test_numbered_row_with_missing_position_and_qty_is_not_lost() -> None:
+    data = _book(['№', 'Наименование', 'Кол-во', '№ поз. в ТХ'],
+                 [[1, 'Стол', 2, '7.124'], [2, 'Стул', None, None]])
+    doc = parse_xlsx(data)
+    assert len(doc.items) == 2
+    assert doc.items[1].pos == '' and doc.items[1].qty is None
+    assert any('количество' in warning for warning in doc.items[1].warnings)
+
+
+def test_kp_form_obem_qty_numbering_and_section_headings() -> None:
+    # Форма КП/смета: количество в столбце «Объем»; под шапкой строка-нумерация столбцов и
+    # заголовки-категории (номер по «№ п/п», но без кол-ва и единицы) — это не позиции.
+    # Характеристики идут строками-продолжениями и уходят в описание.
+    data = _book(
+        ['№ п/п', 'Наименование работ и материалов', 'Ед. изм.', 'Объем', 'Цена за ед., руб с НДС'],
+        [
+            ['1', '2', '3', '4', '5'],                         # нумерация столбцов — не позиция
+            ['1', 'Монтаж оборудования:', None, None, None],   # заголовок-категория — не позиция
+            ['1', 'Стеллаж металлический Optimus', 'шт.', 8, None],
+            [None, 'Количество ярусов – 3', None, None, None],  # характеристика
+            ['2', 'Подметальная машина', 'шт.', 1, None],
+        ],
+    )
+    doc = parse_xlsx(data, file_name='Форма КП.xlsx')
+    assert [s.name for s in doc.summary] == ['Стеллаж металлический Optimus', 'Подметальная машина']
+    assert [s.qty for s in doc.summary] == [8.0, 1.0] and doc.summary[0].unit == 'шт.'
+    assert 'Количество ярусов' in doc.summary[0].description
+
+
 def test_merged_qty_shared_between_two_items() -> None:
     # Две разные позиции (свои номера), количество общее на обе через объединение.
     wb = Workbook()
@@ -181,6 +237,27 @@ def test_integer_and_mark_positions_are_not_flagged() -> None:
     doc = parse_xlsx(data, file_name="н.xlsx")
     flagged = [it.pos for it in doc.items if any("необычный номер" in w for w in it.warnings)]
     assert flagged == ["?!"]  # только по-настоящему странный номер
+
+
+def test_embedded_image_is_attached_to_its_row() -> None:
+    # Встроенная в xlsx картинка (как в «Каталог ПИК») привязывается к товару своей строки.
+    from openpyxl.drawing.image import Image as XLImage
+    from PIL import Image as PILImage
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(['Поз.', 'Наименование', 'Ед.', 'Кол-во'])
+    ws.append(['1', 'Стол', 'шт.', 2])
+    ws.append(['2', 'Стул', 'шт.', 3])
+    pic = io.BytesIO()
+    PILImage.new('RGB', (40, 30), (10, 120, 200)).save(pic, 'PNG')
+    pic.seek(0)
+    ws.add_image(XLImage(pic), 'F2')  # картинка у строки «Стол»
+    out = io.BytesIO()
+    wb.save(out)
+    by_name = {s.name: s for s in parse_xlsx(out.getvalue(), file_name='с.xlsx').summary}
+    assert by_name['Стол'].image.startswith('data:image/jpeg;base64,')
+    assert not by_name['Стул'].image  # у этой строки картинки нет
 
 
 def test_dispatch_by_extension() -> None:

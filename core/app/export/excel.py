@@ -8,11 +8,14 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import math
 from dataclasses import dataclass
 from datetime import date
 
 from openpyxl import Workbook
+from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
@@ -21,7 +24,7 @@ from ..models import ExportRequest, KpSettings, SourceDocument, SpecItem, Summar
 from ..parsing.aggregate import cross_volume_duplicates
 from ..pricing.attributes import parse_params
 from ..pricing.indexation import indexation_factor, rate_for, years_between
-from .kp import format_date, price_row, round_half_up
+from .kp import effective_markup, format_date, price_row, round_half_up
 
 FONT = "Times New Roman"
 THIN = Side(style="thin")
@@ -114,10 +117,14 @@ def build_workbook(data: ExportRequest) -> Workbook:
     # Сквозная нумерация по всему своду, как в образце (№ не начинается заново на листе «2»).
     numbered = list(enumerate(data.summary, start=1))
     if kind == "kp" and data.kp is not None:
+        if data.kp_template:
+            from .template import build_template_workbook
+
+            return build_template_workbook(data)
         delivery = _indexation_date(data)
         if delivery is not None and data.indexation is not None and data.indexation.apply_to_kp:
             # КП на будущую поставку: базовая цена каждой строки проиндексирована к дате по ставке раздела.
-            numbered = [(n, _indexed_item(s, data.indexation.rates, delivery)) for n, s in numbered]
+            numbered = [(n, _indexed_item(s, data.indexation.rates, delivery, date.fromisoformat(data.indexation.base_date) if data.indexation.base_date else None)) for n, s in numbered]
         mounted = [(n, s) for n, s in numbered if s.installation]
         inventory = [(n, s) for n, s in numbered if not s.installation]
         _fill_appendix(wb.active, data, mounted, data.kp, APPENDIX_1)
@@ -177,11 +184,11 @@ def _indexation_date(data: ExportRequest) -> date | None:
         return None
 
 
-def _indexed_item(item: SummaryItem, rates: dict[str, float], delivery: date) -> SummaryItem:
+def _indexed_item(item: SummaryItem, rates: dict[str, float], delivery: date, start: date | None = None) -> SummaryItem:
     rate = rate_for(item.section, rates)
     if item.price is None or rate is None:
         return item
-    return item.model_copy(update={"price": round_half_up(item.price * indexation_factor(rate, date.today(), delivery), 2)})
+    return item.model_copy(update={"price": round_half_up(item.price * indexation_factor(rate, start or date.today(), delivery), 2)})
 
 
 def _fill_cost_sheet(ws: Worksheet, data: ExportRequest, rows: list[tuple[int, SummaryItem]]) -> None:
@@ -190,7 +197,7 @@ def _fill_cost_sheet(ws: Worksheet, data: ExportRequest, rows: list[tuple[int, S
     можно было поправить прямо в Excel)."""
     ws.title = "Себестоимость"
     delivery = _indexation_date(data)
-    years = years_between(date.today(), delivery) if delivery is not None else 0.0
+    years = years_between(date.fromisoformat(data.indexation.base_date) if data.indexation and data.indexation.base_date else date.today(), delivery) if delivery is not None else 0.0
     columns = list(COST_COLUMNS)
     if delivery is not None:
         columns += [("Индексация, % в год", 12), (f"Цена на {delivery.isoformat()}", 14), (f"Стоимость на {delivery.isoformat()}", 15)]
@@ -399,6 +406,9 @@ def _fill_appendix(
         _write_helper_columns(ws, row, last_col, kp, appendix.with_installation)
         row += 1
     last = max(row - 1, first)
+    has_images = any(item.image for _number, item in rows)
+    if has_images:
+        _add_appendix_images(ws, rows, last_col, first)
 
     # Итог: на листе «1» — «Итого с НДС» в M/N, на листе «2» — «Всего с НДС» в K/L.
     total_col = last_col - 1
@@ -428,7 +438,7 @@ def _fill_appendix(
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
-    ws.print_area = f"A1:{get_column_letter(last_col)}{total_row + 10}"
+    ws.print_area = f"A1:{get_column_letter(last_col + (1 if has_images else 0))}{total_row + 10}"
 
 
 def _write_row_1(ws: Worksheet, r: int, number: int, item: SummaryItem, kp: KpSettings | None) -> None:
@@ -500,9 +510,48 @@ def _write_helper_columns(ws: Worksheet, r: int, last_col: int, kp: KpSettings |
     """Графы «пр», «дост», «монт» за областью печати — проценты, по которым посчитана строка."""
     if kp is None:
         return
-    values = (kp.markup_percent, kp.delivery_percent, kp.installation_percent if with_installation else 0)
+    values = (effective_markup(kp), kp.delivery_percent, kp.installation_percent if with_installation else 0)
     for offset, value in enumerate(values, start=3):
         ws.cell(r, last_col + offset, value).font = Font(name=FONT, size=10)
+
+
+IMAGE_CELL_PX = 96  # размер картинки товара в ячейке приложения КП
+
+
+def _cell_image(data_uri: str, max_px: int = IMAGE_CELL_PX) -> XLImage | None:
+    """Картинка из data-URI → объект для вставки в Excel, вписанная в max_px. None — если нет/битая."""
+    if not data_uri or "," not in data_uri:
+        return None
+    try:
+        raw = base64.b64decode(data_uri.split(",", 1)[1])
+        pic = XLImage(io.BytesIO(raw))
+        w, h = pic.width or max_px, pic.height or max_px
+        scale = min(max_px / w, max_px / h, 1.0)
+        pic.width, pic.height = int(w * scale), int(h * scale)
+        return pic
+    except Exception:  # noqa: BLE001 — картинка не критична для выгрузки
+        return None
+
+
+def _add_appendix_images(ws: Worksheet, rows: list[tuple[int, SummaryItem]], last_col: int, first: int) -> None:
+    """Столбец «Изображение» после основных граф приложения: миниатюра товара в каждой строке."""
+    col = last_col + 1
+    ws.column_dimensions[get_column_letter(col)].width = 15.5
+    header = ws.cell(3, col, "Изображение")
+    header.font = Font(name=FONT, size=10, bold=True)
+    header.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    header.border = BORDER
+    header.fill = FILL_SUPPLIER
+    for offset, (_number, item) in enumerate(rows):
+        r = first + offset
+        ws.cell(r, col).border = BORDER
+        pic = _cell_image(item.image)
+        if pic is None:
+            continue
+        ws.add_image(pic, f"{get_column_letter(col)}{r}")
+        need = pic.height * 0.75 + 6  # пиксели → пункты высоты строки
+        if (ws.row_dimensions[r].height or 0) < need:
+            ws.row_dimensions[r].height = need
 
 
 def _set_row_height(ws: Worksheet, r: int, item: SummaryItem, appendix: Appendix) -> None:

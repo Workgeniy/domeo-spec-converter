@@ -26,11 +26,16 @@ def build_summary(items: list[SpecItem]) -> list[SummaryItem]:
                 qty=0.0,
                 section=_section_for(item),
                 note=item.note,
+                image=item.image,
+                image_origin="file" if item.image else "",
             )
             by_key[key] = summary
             order.append(key)
         summary.item_ids.append(item.id)
         summary.groups.append(GroupQty(group=item.group, qty=item.qty))
+        if not summary.image and item.image:  # картинка могла прийти с объединённой строки позиции
+            summary.image = item.image
+            summary.image_origin = "file"
         if item.qty is None:
             summary.qty = None if summary.qty in (None, 0.0) and len(summary.item_ids) == 1 else summary.qty
             summary.warnings.append(f"стр. {item.page}: количество не прочитано, в сумме не учтено")

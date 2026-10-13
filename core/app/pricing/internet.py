@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from zoneinfo import ZoneInfo
 
+from ..images import fetch_product_image
 from ..models import InternetLookup, InternetOffer, InternetSearchInfo, MatchRequestItem, SearchParam
 from .attributes import clean_params, params_key, parse_params
 from .history import analyze_name, normalize_name
@@ -137,6 +138,20 @@ def build_query(name: str, description: str) -> str:
     """Что ищем — наименование и укороченные характеристики (в кэше и в интерфейсе)."""
     text = " ".join(part for part in (name.strip(), description.strip()) if part)
     return re.sub(r"\s+", " ", text)[:DESCRIPTION_LIMIT]
+
+
+def best_offer_url(lookup: InternetLookup) -> str:
+    """Ссылка предложения, с которого брать картинку товара: точное (не аналог) предложение
+    с рекомендуемой ценой, иначе первое точное, иначе любое с http-ссылкой. '' — брать неоткуда."""
+    offers = [o for o in lookup.offers if o.url.startswith(("http://", "https://"))]
+    if not offers:
+        return ""
+    pool = [o for o in offers if not o.analog] or offers
+    if lookup.price is not None:
+        for offer in pool:
+            if offer.price == lookup.price:
+                return offer.url
+    return pool[0].url
 
 
 class ClaudeWebSearchProvider:
@@ -367,12 +382,17 @@ class InternetPriceService:
         data_dir: str | Path | None = None,
         ttl_days: int = DEFAULT_TTL_DAYS,
         concurrency: int = DEFAULT_CONCURRENCY,
+        image_fetcher: Callable[[str], str] | None = None,
     ):
         self.provider = provider
         self.data_dir = Path(data_dir or os.environ.get("DATA_DIR") or DEFAULT_DATA_DIR)
         self.path = self.data_dir / "internet_prices.json"
         self.ttl_days = ttl_days
         self.concurrency = max(1, concurrency)
+        # Картинку товара тянем со страницы предложения, только когда её просили (у позиции нет
+        # своей из файла). Переменной INTERNET_PRICE_IMAGES=0 это можно совсем выключить.
+        self.image_fetcher = image_fetcher or fetch_product_image
+        self.fetch_images = os.environ.get("INTERNET_PRICE_IMAGES", "1").strip().lower() not in ("0", "false", "no", "off")
         self._cache: dict[str, InternetLookup] = {}
         self._lock = threading.Lock()
         self._save_lock = threading.Lock()
@@ -505,4 +525,16 @@ class InternetPriceService:
                 provider=self.provider.name,
             )
         lookup.params = params  # с какими параметрами искали — интерфейс увидит, что их потом поменяли
+        if self.fetch_images and item.want_image and lookup.status == "found" and not lookup.image:
+            lookup.image = self._lookup_image(lookup)
         return lookup
+
+    def _lookup_image(self, lookup: InternetLookup) -> str:
+        """Миниатюра товара со страницы лучшего предложения; сбой/отсутствие → ''."""
+        url = best_offer_url(lookup)
+        if not url:
+            return ""
+        try:
+            return self.image_fetcher(url) or ""
+        except Exception:  # noqa: BLE001 — картинка не критична для цены
+            return ""
