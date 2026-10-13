@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Десктоп-оболочка: нативное окно (WebView2) + запуск бэкенда (ядро разбора и API)
+       как дочерних процессов. В автономной сборке рядом с .exe лежат core/, api/, web/,
+       tesseract/, pgsql/; на машине разработки — откат на репозиторий. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Domeo</AssemblyName>
+    <RootNamespace>DomeoSpec.Desktop</RootNamespace>
+    <ApplicationIcon></ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2792.45" />
+  </ItemGroup>
+
+</Project>
