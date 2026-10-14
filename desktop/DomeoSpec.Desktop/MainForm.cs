@@ -40,7 +40,9 @@ public sealed class MainForm : Form
         }
         try
         {
-            await _backend.StartAsync(s => BeginInvoke(() => _status.Text = s), CancellationToken.None);
+            // Поднимаем бэкенд в фоновом потоке: запуск БД/ядра блокирующий, и на UI-потоке окно
+            // «замерзало» бы на эти секунды (выглядит как зависание, пользователь жмёт запуск второй раз).
+            await Task.Run(() => _backend.StartAsync(s => BeginInvoke(() => _status.Text = s), CancellationToken.None));
             var env = await CoreWebView2Environment.CreateAsync(userDataFolder: Path.Combine(_backend.DataDir, "webview"));
             await _web.EnsureCoreWebView2Async(env);
             Controls.Remove(_status);

@@ -26,22 +26,23 @@ public sealed class Backend : IAsyncDisposable
     {
         Directory.CreateDirectory(DataDir);
 
+        int corePort = FreePort();
+        int apiPort = FreePort();
+
+        // Ядро грузится дольше всего (Python + библиотеки) — запускаем его сразу, пока поднимается БД.
+        status("Запуск ядра разбора…");
+        StartCore(corePort);
+
         string? conn = null;
         var bundlePgBin = Path.Combine(_root, "pgsql", "bin");
         if (File.Exists(Path.Combine(bundlePgBin, "pg_ctl.exe"))) // портативный PostgreSQL в комплекте
         {
-            status("Подготовка базы данных…");
+            status("Запуск базы данных…");
             var (bin, data) = ResolvePostgres(bundlePgBin);  // гарантируем ASCII-путь для PostgreSQL
             _pg = new PostgresServer(bin, data);
             await _pg.StartAsync(status, ct);
             conn = _pg.ConnectionString;
         }
-
-        int corePort = FreePort();
-        int apiPort = FreePort();
-
-        status("Запуск ядра разбора…");
-        StartCore(corePort);
 
         status("Запуск сервиса…");
         StartApi(apiPort, corePort, conn);

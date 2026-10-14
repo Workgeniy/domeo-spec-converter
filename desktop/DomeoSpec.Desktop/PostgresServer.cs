@@ -31,9 +31,31 @@ public sealed class PostgresServer
             Run("initdb.exe", "-D", _dataDir, "-U", "postgres", "-A", "trust", "-E", "UTF8", "--no-locale");
         }
         status("Запуск базы данных…");
-        _port = FreePort();
         var log = Path.Combine(_dataDir, "server.log");
-        Run("pg_ctl.exe", "-D", _dataDir, "-o", $"-p {_port} -h 127.0.0.1", "-l", log, "-w", "-t", "60", "start");
+        var pidFile = Path.Combine(_dataDir, "postmaster.pid");
+        for (var attempt = 1; ; attempt++)
+        {
+            // Перед попыткой убираем возможный хвост: прошлый экземпляр мог завершиться аварийно
+            // (остался postmaster.pid и, может, висящий сервер), иначе pg_ctl start упал бы с
+            // «lock file already exists».
+            if (File.Exists(pidFile))
+            {
+                try { Exec("pg_ctl.exe", new[] { "-D", _dataDir, "-m", "immediate", "-w", "-t", "20", "stop" }, 30_000); } catch { /* уже мёртв */ }
+                try { File.Delete(pidFile); } catch { /* уже удалён */ }
+            }
+            _port = FreePort();
+            try
+            {
+                Run("pg_ctl.exe", "-D", _dataDir, "-o", $"-p {_port} -h 127.0.0.1", "-l", log, "-w", "-t", "60", "start");
+                break;  // база поднялась
+            }
+            catch when (attempt < 3)
+            {
+                // Иногда старт срывается транзиторно (освобождение блокировки/портов от прошлого
+                // запуска) — короткая пауза и повтор, вместо того чтобы упасть целиком.
+                await Task.Delay(1500, ct);
+            }
+        }
         EnsureDatabase();
         ConnectionString = $"Host=127.0.0.1;Port={_port};Database=domeo;Username=postgres";
         await Task.CompletedTask;
