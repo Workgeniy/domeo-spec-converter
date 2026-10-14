@@ -13,7 +13,6 @@ public sealed class Backend : IAsyncDisposable
 {
     private readonly List<Process> _procs = new();
     private readonly string _root = AppContext.BaseDirectory;
-    private PostgresServer? _pg;
 
     /// <summary>Адрес интерфейса после запуска (http://127.0.0.1:порт/spec/).</summary>
     public string AppUrl { get; private set; } = "";
@@ -39,19 +38,13 @@ public sealed class Backend : IAsyncDisposable
         StartCore(corePort);
         DiagLog.Log($"ядро запущено, pid={_procs.LastOrDefault()?.Id}");
 
-        string? conn = null;
-        var bundlePgBin = Path.Combine(_root, "pgsql", "bin");
-        if (File.Exists(Path.Combine(bundlePgBin, "pg_ctl.exe"))) // портативный PostgreSQL в комплекте
-        {
-            status("Запуск базы данных…");
-            var (bin, data) = ResolvePostgres(bundlePgBin);  // гарантируем ASCII-путь для PostgreSQL
-            DiagLog.Log($"PostgreSQL bin={bin} data={data}");
-            _pg = new PostgresServer(bin, data);
-            await _pg.StartAsync(status, ct);
-            conn = _pg.ConnectionString;
-            DiagLog.Log($"БД поднялась: {conn}");
-        }
-        else DiagLog.Log("pg_ctl.exe не найден — БД пропущена");
+        // Хранилище истории КП / объектов / загрузок — встроенный файловый SQLite (движок внутри
+        // процесса API, без отдельного процесса или службы БД). Строку подключения вида «Data Source=…»
+        // API распознаёт и выбирает SQLite вместо PostgreSQL.
+        var sqlitePath = Path.Combine(DataDir, "domeo.db");
+        await MigrateLegacyPostgresIfNeeded(sqlitePath, status, ct);
+        var conn = $"Data Source={sqlitePath}";
+        DiagLog.Log($"хранилище SQLite: {sqlitePath} (есть={File.Exists(sqlitePath)})");
 
         status("Запуск сервиса…");
         StartApi(apiPort, corePort, conn);
@@ -65,6 +58,30 @@ public sealed class Backend : IAsyncDisposable
             DiagLog.Log("health OK — интерфейс готов");
         }
         catch (Exception ex) { DiagLog.Log($"health НЕ дождались: {ex.Message}"); throw; }
+    }
+
+    // Если рядом лежит портативный PostgreSQL с данными, а SQLite ещё не создан — один раз переносим
+    // историю/объекты/загрузки в SQLite (дальше PostgreSQL не запускается вовсе). Неуспех прерывает
+    // запуск: данные в PostgreSQL целы, повторим при следующем старте — так мы не поднимем API на
+    // пустой базе и не «потеряем» объекты. Чистая установка (нет кластера) проходит мимо — сразу SQLite.
+    private async Task MigrateLegacyPostgresIfNeeded(string sqlitePath, Action<string> status, CancellationToken ct)
+    {
+        if (File.Exists(sqlitePath)) return;  // уже перенесено, либо новый пользователь уже на SQLite
+        var bundlePgBin = Path.Combine(_root, "pgsql", "bin");
+        if (!File.Exists(Path.Combine(bundlePgBin, "pg_ctl.exe"))) return;  // PostgreSQL не в комплекте
+        var (bin, data) = ResolvePostgres(bundlePgBin);
+        if (!File.Exists(Path.Combine(data, "PG_VERSION"))) return;  // кластера нет — переносить нечего
+
+        status("Перенос базы в новый формат (один раз)…");
+        DiagLog.Log("миграция PostgreSQL → SQLite: старт");
+        var pg = new PostgresServer(bin, data);
+        try
+        {
+            await pg.StartAsync(status, ct);
+            SqliteMigration.Migrate(pg.ConnectionString, sqlitePath);
+            DiagLog.Log("миграция PostgreSQL → SQLite: завершена");
+        }
+        finally { pg.Stop(); }
     }
 
     private void StartCore(int port)
@@ -210,7 +227,6 @@ public sealed class Backend : IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
-        _pg?.Stop();  // корректно останавливаем кластер PostgreSQL
         foreach (var p in _procs)
         {
             try
