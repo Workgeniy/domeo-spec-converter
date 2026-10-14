@@ -1,4 +1,4 @@
-<#
+﻿<#
 Сборка автономного десктоп-дистрибутива Domeo (Windows x64) — один бандл build/bundle.
 Требуется: .NET 9 SDK; Python 3.12 с зависимостями ядра и PyInstaller
 (pip install -r core/requirements.txt pyinstaller); бинарники PostgreSQL 15; node/npm для фронта.
