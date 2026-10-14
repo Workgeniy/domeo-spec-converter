@@ -4,6 +4,7 @@ import { UploadedDocuments } from './components/UploadedDocuments'
 import { QuotationHistory } from './components/QuotationHistory'
 import { IconBuildingStore } from '@tabler/icons-react'
 
+import { CompareView } from './components/CompareView'
 import { SuppliersPanel } from './components/SuppliersPanel'
 import { UploadPane } from './components/UploadPane'
 import { WorkspaceView } from './components/WorkspaceView'
@@ -19,6 +20,7 @@ export default function App() {
   const projectId = useWorkspace((s) => s.projectId)
   const [documentsOpen, setDocumentsOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [compareOpen, setCompareOpen] = useState(false)
   const [workspaceKey, setWorkspaceKey] = useState(0)
   const hasDocuments = useWorkspace((s) => s.documents.length > 0 || s.cloud.revision > 0)
   const addDocument = useWorkspace((s) => s.addDocument)
@@ -39,6 +41,7 @@ export default function App() {
               <Button variant="light" size="xs" onClick={() => setProjectsOpen(true)}>Объекты</Button>
               <Button variant="light" size="xs" onClick={() => setDocumentsOpen(true)}>Документы</Button>
               <Button variant="light" size="xs" onClick={() => setHistoryOpen(true)}>История КП</Button>
+              <Button variant="light" size="xs" onClick={() => setCompareOpen(true)}>Сравнение</Button>
               <Button variant="default" size="xs" leftSection={<IconBuildingStore size={16} />} onClick={openSuppliers}>
                 Поставщики
               </Button>
@@ -67,6 +70,9 @@ export default function App() {
       </Modal>
       <Modal opened={historyOpen} onClose={() => setHistoryOpen(false)} title="История коммерческих предложений" size="90%" transitionProps={{ duration: 0 }}>
         {historyOpen && <QuotationHistory onOpened={() => { setWorkspaceKey((n) => n + 1); setHistoryOpen(false) }} />}
+      </Modal>
+      <Modal opened={compareOpen} onClose={() => setCompareOpen(false)} title="Сравнение спецификаций" size="90%" transitionProps={{ duration: 0 }}>
+        {compareOpen && <CompareView />}
       </Modal>
       <Modal opened={suppliersOpen} onClose={closeSuppliers} title="Поставщики и их цены" size="90%" transitionProps={{ duration: 0 }}>
         <SuppliersPanel />
