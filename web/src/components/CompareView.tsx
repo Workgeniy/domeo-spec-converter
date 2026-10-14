@@ -164,7 +164,9 @@ export function CompareView() {
   // «Было» — всегда текущий открытый объект (все его тома вместе), менять нельзя.
   const before = useMemo<Side | null>(() => {
     const summary = documents.flatMap((d) => d.doc.summary)
-    return summary.length ? { label: title || 'текущий объект', summary } : null
+    const first = documents[0]?.doc
+    const label = title || first?.doc_code || first?.file_name || 'текущий объект'
+    return summary.length ? { label, summary } : null
   }, [documents, title])
 
   const diff = useMemo(() => (before && after ? diffSpecs(before.summary, after.summary) : null), [before, after])

@@ -147,8 +147,9 @@ export const useWorkspace = create<WorkspaceState>()(
       setTitle: (title) => set({ title }),
       addDocument: (doc, original) =>
         set((s) => ({
-          // Название объекта берём из первого тома, если менеджер ещё ничего не ввёл.
-          title: s.title || doc.title,
+          // Название объекта берём из первого тома: наименование из спеки, иначе имя документа
+          // (шифр/имя файла), чтобы объект не был «Без названия».
+          title: s.title || doc.title || doc.doc_code || doc.file_name,
           documents: [...s.documents, { id: newId(), loadedAt: new Date().toISOString(), doc, original }],
         })),
       removeDocument: (id) => set((s) => {

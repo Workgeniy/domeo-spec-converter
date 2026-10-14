@@ -12,9 +12,14 @@ public sealed partial class PostgresQuotationStore : IProjectStore
     private static ProjectInfo ProjectInfoFrom(NpgsqlDataReader r) => new(r.GetGuid(0), r.GetInt64(1), r.GetDateTime(2),
         r.GetString(3), r.GetInt32(4), r.GetInt32(5), r.IsDBNull(6) ? null : r.GetDouble(6), r.IsDBNull(7) ? null : r.GetGuid(7));
 
+    // В спеке часто нет наименования объекта → заголовок пустой. Тогда в списке показываем имя
+    // документа: шифр, иначе имя файла первого тома (из снимка). Поиск — по тому же выражению.
+    private const string TitleExpr =
+        "COALESCE(NULLIF(title,''), NULLIF(snapshot->'documents'->0->'doc'->>'doc_code',''), snapshot->'documents'->0->'doc'->>'file_name', '')";
+
     public Task<IReadOnlyList<ProjectInfo>> ListProjectsAsync(string search, int offset, int limit, CancellationToken ct) => Run<IReadOnlyList<ProjectInfo>>(async db =>
     {
-        await using var cmd = db.CreateCommand($"SELECT {ProjectColumns} FROM spec_projects WHERE ($1='' OR strpos(lower(title),lower($1))>0) ORDER BY updated_at DESC,id DESC LIMIT $2 OFFSET $3");
+        await using var cmd = db.CreateCommand($"SELECT id,revision,updated_at,{TitleExpr} AS title,documents,positions,margin_percent,quotation_id FROM spec_projects WHERE ($1='' OR strpos(lower({TitleExpr}),lower($1))>0) ORDER BY updated_at DESC,id DESC LIMIT $2 OFFSET $3");
         cmd.Parameters.AddWithValue(search); cmd.Parameters.AddWithValue(limit); cmd.Parameters.AddWithValue(offset);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         var result = new List<ProjectInfo>();
