@@ -51,7 +51,9 @@ public sealed class MainForm : Form
         }
         catch (Exception ex)
         {
-            _status.Text = "Не удалось запустить приложение:\n" + ex.Message;
+            DiagLog.Log($"СБОЙ запуска: {ex}");
+            _status.Text = "Не удалось запустить приложение:\n" + ex.Message +
+                "\n\nПодробности — в файле %LOCALAPPDATA%\\DomeoSpec\\start-diag.log";
         }
     }
 

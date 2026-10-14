@@ -25,13 +25,19 @@ public sealed class Backend : IAsyncDisposable
     public async Task StartAsync(Action<string> status, CancellationToken ct)
     {
         Directory.CreateDirectory(DataDir);
+        DiagLog.Init(Path.Combine(DataDir, "start-diag.log"));
+        DiagLog.Log($"root={_root}");
+        DiagLog.Log($"user={Environment.UserName} 64bit={Environment.Is64BitProcess} cwd={Environment.CurrentDirectory}");
+        DiagLog.Log($"PATH={Environment.GetEnvironmentVariable("PATH")}");
 
         int corePort = FreePort();
         int apiPort = FreePort();
+        DiagLog.Log($"corePort={corePort} apiPort={apiPort}");
 
         // Ядро грузится дольше всего (Python + библиотеки) — запускаем его сразу, пока поднимается БД.
         status("Запуск ядра разбора…");
         StartCore(corePort);
+        DiagLog.Log($"ядро запущено, pid={_procs.LastOrDefault()?.Id}");
 
         string? conn = null;
         var bundlePgBin = Path.Combine(_root, "pgsql", "bin");
@@ -39,17 +45,26 @@ public sealed class Backend : IAsyncDisposable
         {
             status("Запуск базы данных…");
             var (bin, data) = ResolvePostgres(bundlePgBin);  // гарантируем ASCII-путь для PostgreSQL
+            DiagLog.Log($"PostgreSQL bin={bin} data={data}");
             _pg = new PostgresServer(bin, data);
             await _pg.StartAsync(status, ct);
             conn = _pg.ConnectionString;
+            DiagLog.Log($"БД поднялась: {conn}");
         }
+        else DiagLog.Log("pg_ctl.exe не найден — БД пропущена");
 
         status("Запуск сервиса…");
         StartApi(apiPort, corePort, conn);
+        DiagLog.Log($"API запущен, pid={_procs.LastOrDefault()?.Id}");
 
         AppUrl = $"http://127.0.0.1:{apiPort}/spec/";
         status("Подготовка интерфейса…");
-        await WaitHealthy($"http://127.0.0.1:{apiPort}/api/specifications/health", ct);
+        try
+        {
+            await WaitHealthy($"http://127.0.0.1:{apiPort}/api/specifications/health", ct);
+            DiagLog.Log("health OK — интерфейс готов");
+        }
+        catch (Exception ex) { DiagLog.Log($"health НЕ дождались: {ex.Message}"); throw; }
     }
 
     private void StartCore(int port)

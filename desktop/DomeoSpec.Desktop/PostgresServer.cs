@@ -40,21 +40,21 @@ public sealed class PostgresServer
             // «lock file already exists».
             if (File.Exists(pidFile))
             {
+                DiagLog.Log($"есть postmaster.pid — останавливаю и чищу (попытка {attempt})");
                 try { Exec("pg_ctl.exe", new[] { "-D", _dataDir, "-m", "immediate", "-w", "-t", "20", "stop" }, 30_000); } catch { /* уже мёртв */ }
                 try { File.Delete(pidFile); } catch { /* уже удалён */ }
             }
             _port = FreePort();
-            try
-            {
-                Run("pg_ctl.exe", "-D", _dataDir, "-o", $"-p {_port} -h 127.0.0.1", "-l", log, "-w", "-t", "60", "start");
-                break;  // база поднялась
-            }
-            catch when (attempt < 3)
-            {
-                // Иногда старт срывается транзиторно (освобождение блокировки/портов от прошлого
-                // запуска) — короткая пауза и повтор, вместо того чтобы упасть целиком.
-                await Task.Delay(1500, ct);
-            }
+            DiagLog.Log($"pg_ctl start #{attempt} порт={_port} — спавню pg_ctl…");
+            var (code, _, se) = Exec("pg_ctl.exe", new[] { "-D", _dataDir, "-o", $"-p {_port} -h 127.0.0.1", "-l", log, "-w", "-t", "60", "start" }, 120_000);
+            DiagLog.Log($"pg_ctl start #{attempt} порт={_port}: код={code}");
+            if (code == 0) break;  // база поднялась
+            DiagLog.Log($"  pg_ctl: {se.Trim()}");
+            DiagLog.Log($"  server.log: {DiagLog.Tail(log)}");
+            if (attempt >= 3)
+                throw new InvalidOperationException($"pg_ctl завершился с кодом {code}: {se.Trim()}");
+            // Иногда старт срывается транзиторно (освобождение блокировки/портов) — пауза и повтор.
+            await Task.Delay(1500, ct);
         }
         EnsureDatabase();
         ConnectionString = $"Host=127.0.0.1;Port={_port};Database=domeo;Username=postgres";
