@@ -1,6 +1,9 @@
 using DomeoSpec.Application.Parsing;
 using DomeoSpec.Application.Pricing;
+using DomeoSpec.Application.Quotations;
+using DomeoSpec.Application.Uploads;
 using DomeoSpec.Infrastructure.Engine;
+using DomeoSpec.Infrastructure.Quotations;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -31,10 +34,25 @@ public static class DependencyInjection
             client.BaseAddress = baseUri;
             client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds);
         });
-        services.AddSingleton<DomeoSpec.Infrastructure.Quotations.PostgresQuotationStore>();
-        services.AddSingleton<DomeoSpec.Application.Quotations.IQuotationStore>(s => s.GetRequiredService<DomeoSpec.Infrastructure.Quotations.PostgresQuotationStore>());
-        services.AddSingleton<DomeoSpec.Application.Quotations.IProjectStore>(s => s.GetRequiredService<DomeoSpec.Infrastructure.Quotations.PostgresQuotationStore>());
-        services.AddSingleton<DomeoSpec.Application.Uploads.IUploadStore>(s => s.GetRequiredService<DomeoSpec.Infrastructure.Quotations.PostgresQuotationStore>());
+        // Хранилище истории КП / объектов / загрузок. Строка вида «Data Source=…» (без Host=) —
+        // встроенный SQLite (автономный десктоп, без отдельного процесса БД); иначе PostgreSQL
+        // (сервер/сеть). Пустая строка остаётся на PostgreSQL-варианте: он даёт внятную «БД не настроена».
+        var quotations = configuration.GetConnectionString("Quotations");
+        var useSqlite = !string.IsNullOrWhiteSpace(quotations) && !quotations.Contains("Host=", StringComparison.OrdinalIgnoreCase);
+        if (useSqlite)
+        {
+            services.AddSingleton<SqliteQuotationStore>();
+            services.AddSingleton<IQuotationStore>(s => s.GetRequiredService<SqliteQuotationStore>());
+            services.AddSingleton<IProjectStore>(s => s.GetRequiredService<SqliteQuotationStore>());
+            services.AddSingleton<IUploadStore>(s => s.GetRequiredService<SqliteQuotationStore>());
+        }
+        else
+        {
+            services.AddSingleton<PostgresQuotationStore>();
+            services.AddSingleton<IQuotationStore>(s => s.GetRequiredService<PostgresQuotationStore>());
+            services.AddSingleton<IProjectStore>(s => s.GetRequiredService<PostgresQuotationStore>());
+            services.AddSingleton<IUploadStore>(s => s.GetRequiredService<PostgresQuotationStore>());
+        }
         return services;
     }
 }
