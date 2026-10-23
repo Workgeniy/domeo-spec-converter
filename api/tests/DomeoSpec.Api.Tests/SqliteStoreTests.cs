@@ -38,9 +38,43 @@ public sealed class SqliteStoreTests : IDisposable
         var detail = (await client.GetFromJsonAsync<JsonNode>(url))!["data"]!;
         Assert.Equal(1, detail["info"]!["revision"]!.GetValue<int>());
         Assert.True(detail["snapshot"]!["documents"]![0]!["doc"]!["summary"]![1]!["excluded"]!.GetValue<bool>());
+        var summary = detail["snapshot"]!["documents"]![0]!["doc"]!["summary"]!;
+        Assert.Equal(100, summary[0]!["price"]!.GetValue<int>());  // цена позиции переживает сохранение/открытие
+        Assert.Equal(500, summary[1]!["price"]!.GetValue<int>());
         var listed = (await client.GetFromJsonAsync<JsonNode>("/api/specifications/projects?search=Школа"))!["data"]!.AsArray();
         Assert.Single(listed);
         Assert.True(File.Exists(dbPath));  // DI действительно выбрал SQLite — файл создан
+    }
+
+    [Fact]
+    public async Task Api_persists_internet_and_history_prices_through_round_trip()
+    {
+        // Цены у пользователя приходят из поиска (internet) и истории (history). Проверяем, что
+        // снимок с заполненными internet/history сохраняется и открывается без потери цен.
+        var dbPath = Path.Combine(dir, "net.db");
+        using var factory = new ApiFactory();
+        using var app = factory.WithWebHostBuilder(b => b.UseSetting("ConnectionStrings:Quotations", $"Data Source={dbPath}"));
+        using var client = app.CreateClient();
+        var req = ProjectsApiTests.Request();
+        var doc0 = req.Snapshot.Documents[0];
+        var lookup = new InternetLookup
+        {
+            Status = "found", Query = "стол", LookedUpAt = "2026-10-23", Price = 1250, Provider = "fake",
+            Offers = [new InternetOffer { Title = "Стол офисный", Url = "https://shop.test/1", Shop = "Магазин", Price = 1250 }],
+        };
+        var history = new HistoryPrice { Kind = "exact", Best = new HistoryCandidate { Key = "стол", Name = "Стол", PriceMedian = 1200 } };
+        var summary = doc0.Doc.Summary.ToList();
+        summary[0] = summary[0] with { Price = 1250, PriceSource = "internet", Internet = lookup, InternetPrice = 1250, History = history };
+        var snapshot = req.Snapshot with { Documents = [doc0 with { Doc = doc0.Doc with { Summary = summary } }] };
+        var url = $"/api/specifications/projects/{Guid.NewGuid()}";
+
+        var put = await client.PutAsJsonAsync(url, req with { Snapshot = snapshot }, Json);
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);  // если снимок с ценами из интернета не сохраняется — тут будет не OK
+        var item = (await client.GetFromJsonAsync<JsonNode>(url))!["data"]!["snapshot"]!["documents"]![0]!["doc"]!["summary"]![0]!;
+        Assert.Equal(1250, item["price"]!.GetValue<int>());
+        Assert.Equal("found", item["internet"]!["status"]!.GetValue<string>());
+        Assert.Equal(1250, item["internet"]!["price"]!.GetValue<int>());
+        Assert.Equal("exact", item["history"]!["kind"]!.GetValue<string>());
     }
 
     [Fact]
