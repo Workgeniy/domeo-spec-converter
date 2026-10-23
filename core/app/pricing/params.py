@@ -68,6 +68,18 @@ class Params:
     def empty(self) -> bool:
         return not (self.dims or self.volume_l or self.mass_kg or self.power_kw or self.diameter_mm or self.counts)
 
+    def search_hint(self) -> str:
+        """Один «ходовой» параметр для поискового запроса: объём (так ищут технику), иначе
+        диаметр, иначе мощность. Габариты сюда НЕ кладём — точный тройной размер ведёт себя
+        как жёсткая спецификация и обнуляет выдачу; у техники объём «попадучее» миллиметров."""
+        if self.volume_l:
+            return f"{_fmt(self.volume_l[0])} л"
+        if self.diameter_mm:
+            return f"Ø{self.diameter_mm[0]}"
+        if self.power_kw:
+            return f"{_fmt(self.power_kw[0])} кВт"
+        return ""
+
     def describe(self, counts: bool = False) -> str:
         """Для запроса к поисковику и для комментария: «2000x1000x400 700 л». Счётные признаки
         («2 секц.») — только в комментарий: в названии для поисковика они и так есть словами."""

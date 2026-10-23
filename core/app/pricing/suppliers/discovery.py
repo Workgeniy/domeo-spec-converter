@@ -166,12 +166,14 @@ class WebPriceSearch:
         длинный запрос с размерами на бесплатном поиске часто не находит ничего; если по нему цен
         нет, в ход идут характеристики, в конце — просто название (подходящее отберёт сверка в индексе)."""
         manual = parse_params(params)
+        hint = extract_params(description).search_hint()  # ходовой параметр: объём/диаметр/мощность (не габариты)
         queries: list[str] = []
         for query in (
-            build_query(name, "", manual.query()),  # как ищет человек: название, без габаритов
-            build_query(name, f"{description} {manual.numeric_text}", manual.query()),  # + характеристики
+            build_query(name, "", f"{manual.query()} {hint}".strip()),  # как ищет человек: название + объём (если есть)
+            build_query(name, "", manual.query()),  # просто название
+            build_query(name, f"{description} {manual.numeric_text}", manual.query()),  # + все характеристики (габариты)
             build_query(name, manual.numeric_text, manual.query()),
-            build_query(name),  # просто название
+            build_query(name),
         ):
             if query not in queries:
                 queries.append(query)
