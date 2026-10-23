@@ -282,6 +282,29 @@ def test_same_item_rules(tmp_path: Path) -> None:
     assert sink.status == "not_found"
 
 
+def test_toy_offer_does_not_price_equipment(tmp_path: Path) -> None:
+    index = SupplierIndex(data_dir=tmp_path)
+    shop = index.add("Магазин", "shop.test")
+    index.set_offers(
+        shop.id,
+        [
+            Extracted(name="Музыкальный центр Sony Hi-Fi аудиосистема", price=15990),
+            Extracted(name="Музыкальный центр детский развивающий, игрушка", price=500),
+        ],
+        "карта сайта",
+    )
+    # Оборудование (не игрушка): детская игрушка с тем же названием цену не задаёт, остаётся «похожим».
+    eq = index.lookup("Музыкальный центр", "для музыкального зала", "шт.", "2026-10-23")
+    assert eq.price == 15990
+    assert [(o.title, o.analog) for o in eq.offers] == [
+        ("Музыкальный центр Sony Hi-Fi аудиосистема", False),
+        ("Музыкальный центр детский развивающий, игрушка", True),
+    ]
+    # Если сама позиция — игрушка, игрушки в предложениях уместны (засчитываются).
+    toy = index.lookup("Музыкальный центр развивающая игрушка", "", "шт.", "2026-10-23")
+    assert toy.price is not None and 500 in [o.price for o in toy.offers if not o.analog]
+
+
 def test_operator_params_pick_offers_and_price(tmp_path: Path) -> None:
     index = SupplierIndex(data_dir=tmp_path)
     shop = index.add("Мебель-Опт", "mebel-opt.test")

@@ -76,7 +76,17 @@ NOTE_PARAMS_MATCH = "параметры совпали"
 NOTE_PARAMS_PARTIAL = "параметры совпали не все: часть не указана"
 NOTE_PARAMS_CONFLICT = "параметры не совпали"
 NOTE_PARAMS_UNKNOWN = "параметры не указаны"
+NOTE_CATEGORY = "похоже на детскую игрушку — другой тип товара"
 PLURAL_ENDINGS = ("ы", "и", "ья")  # стулья, столы, стеллажи — так магазины называют разделы каталога
+# Товар для оснащения помещения — оборудование, а не игрушка с тем же названием («музыкальный
+# центр» для зала vs детская игрушка). Если сама позиция не игрушка, а предложение явно игрушка,
+# не даём ему задавать цену (оставляем только как похожее). Маркеры узкие, чтобы не задеть
+# «развивающие пособия»/«детскую мебель», которые детсад закупает всерьёз.
+_TOY_MARKERS = re.compile(r"игрушк|развивающ", re.I)
+
+
+def _is_toy(text: str) -> bool:
+    return bool(_TOY_MARKERS.search(text))
 
 
 class Ranked(NamedTuple):
@@ -108,6 +118,7 @@ class OfferMatcher:
         self.offer_loose: list[set[str]] = []  # основы до и после замены оборотов — для проверки общих слов
         self.offer_codes: list[tuple[str, ...]] = []  # слова названия как коды моделей
         self.offer_compact: list[str] = []  # они же слитно — быстрый отбор по коду модели
+        self.offer_toy: list[bool] = []  # предложение похоже на детскую игрушку
         self.add(offers or [])
 
     def add(self, offers: list[SupplierOffer]) -> None:
@@ -127,6 +138,7 @@ class OfferMatcher:
             codes = code_tokens(title)
             self.offer_codes.append(codes)
             self.offer_compact.append("".join(codes))
+            self.offer_toy.append(_is_toy(title))
             for t in info.stems:
                 self.index[t].add(i)
 
@@ -173,6 +185,7 @@ class OfferMatcher:
         section_key = section.strip().lower()
         own_loose = analyze_name(name).loose
         same_model = self.model_hits(model, name)
+        query_toy = _is_toy(f"{name} {description}")  # сама позиция — игрушка (тогда игрушки в предложениях уместны)
         best: dict[int, Ranked] = {}
         for query_name, alias in [(name, ""), *((a, a) for a in aliases)]:
             info = analyze_name(query_name)
@@ -186,12 +199,12 @@ class OfferMatcher:
             for i in candidates:
                 if alias and not own_loose & self.offer_loose[i] and self.offer_heads[i]:
                     continue  # по чужому названию — только то, что хоть словом похоже на наше (или марка с моделью)
-                ranked = self._rank(i, info.key, query, (first, info.head_word), spec, described, manual, section_key, alias, i in same_model)
+                ranked = self._rank(i, info.key, query, (first, info.head_word), spec, described, manual, section_key, alias, i in same_model, query_toy)
                 if ranked is not None and (i not in best or ranked.score > best[i].score):
                     best[i] = ranked
         # При равном совпадении вперёд идёт модель из проекта, потом предложения с подтверждёнными
         # параметрами, потом без указанных.
-        order = {NOTE_PARAMS_MATCH: 0, NOTE_PARAMS_PARTIAL: 1, "": 2, NOTE_PARAMS_UNKNOWN: 2, NOTE_PARAMS_CONFLICT: 3}
+        order = {NOTE_PARAMS_MATCH: 0, NOTE_PARAMS_PARTIAL: 1, "": 2, NOTE_PARAMS_UNKNOWN: 2, NOTE_PARAMS_CONFLICT: 3, NOTE_CATEGORY: 3}
         return sorted(best.values(), key=lambda r: (-r.score, not r.model, not r.confirmed, order[r.note], -r.matched, r.offer.price))
 
     def _rank(
@@ -206,6 +219,7 @@ class OfferMatcher:
         section_key: str,
         alias: str,
         same_model: bool,
+        query_toy: bool = False,
     ) -> Ranked | None:
         score, common = self._score(key, query, i)
         if same_model:
@@ -242,6 +256,11 @@ class OfferMatcher:
                 note = NOTE_PARAMS_PARTIAL if missing else NOTE_PARAMS_MATCH
             else:
                 note = NOTE_PARAMS_UNKNOWN
+        if self.offer_toy[i] and not query_toy and not same_model:
+            # Детская игрушка для неигрушечной позиции («музыкальный центр» для зала) — другой тип
+            # товара: цену не задаёт, остаётся только как похожее.
+            score = min(score, round(MATCH_THRESHOLD - 0.01, 3))
+            note = NOTE_CATEGORY
         if score >= MATCH_THRESHOLD and not same_model and not self._same_item(query, head, common, i):
             score = round(MATCH_THRESHOLD - 0.01, 3)  # слова похожи, товар другой — в цену не входит
         return Ranked(offer, score, note, alias, confirmed, same_model, matches) if score >= ANALOG_THRESHOLD else None
