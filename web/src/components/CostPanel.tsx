@@ -182,6 +182,7 @@ export function CostPanel({ onDownload, downloading }: Props) {
     }
     cancelRef.current = false
     setProgress({ done: 0, total: targets.length })
+    setSearchingIds(new Set(targets.map((r) => r.id)))  // пока ищем — в графе цены плейсхолдер «ищем цену…»
     let searches = 0
     let stopped = false
     const batchSize = internet?.provider === 'auto' ? LOOKUP_BATCH_AUTO : LOOKUP_BATCH
@@ -198,6 +199,7 @@ export function CostPanel({ onDownload, downloading }: Props) {
         )
         if (!mounted.current) return
         applyInternet(lookups)
+        setSearchingIds((ids) => { const next = new Set(ids); for (const r of batch) next.delete(r.id); return next })  // пачка найдена — убираем плейсхолдер
         searches += Object.values(lookups).reduce((n, l) => n + (l.searches ?? 0), 0)
         setProgress({ done: Math.min(i + batch.length, targets.length), total: targets.length })
       }
@@ -210,6 +212,7 @@ export function CostPanel({ onDownload, downloading }: Props) {
       notifications.show({ color: 'red', title: 'Поиск в интернете прервался', message: e instanceof Error ? e.message : String(e) })
     } finally {
       setProgress(null)
+      setSearchingIds((ids) => { const next = new Set(ids); for (const r of targets) next.delete(r.id); return next })  // снимаем плейсхолдер с оставшихся (стоп/ошибка)
       getInternetSearch()
         .then(setInternet)
         .catch(() => undefined)
@@ -367,6 +370,15 @@ export function CostPanel({ onDownload, downloading }: Props) {
                 <Menu.Item onClick={() => searchInternet('all')}>Все позиции заново ({rows.length})</Menu.Item>
               </Menu.Dropdown>
             </Menu>
+            <Button
+              leftSection={<IconRefresh size={16} />}
+              variant="light"
+              loading={progress !== null}
+              disabled={!searchReady}
+              onClick={() => searchInternet('all')}
+            >
+              Обновить цены
+            </Button>
           </Group>
         </Group>
       </Paper>
