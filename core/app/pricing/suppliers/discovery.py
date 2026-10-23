@@ -54,13 +54,29 @@ class DiscoveredPage:
     offers: list[Extracted] = field(default_factory=list)
 
 
-def build_query(name: str, description: str = "", extra: str = "") -> str:
+def build_query(name: str, description: str = "", extra: str = "", context: str = "") -> str:
     """«Стеллаж с перфорированными полками» + характеристики «…2000х1000х400(h)» →
     «Стеллаж с перфорированными полками 2000x1000x400 купить»; без параметров — просто название.
-    ``extra`` — слова из параметров оператора («ножки металл»), идут сразу за названием."""
+    ``extra`` — слова из параметров оператора («ножки металл»), идут сразу за названием.
+    ``context`` — помещение/назначение из спецификации («музыкальный зал»): уточняет неоднозначное
+    название («музыкальный центр» для зала — аудиосистема, а не игрушка)."""
     text = re.sub(r"\s+", " ", name).strip()
     params = extract_params(description).describe()
-    return " ".join(part for part in (text, " ".join(extra.split()), params, "купить") if part)[:200]
+    ctx = " ".join(context.split())
+    return " ".join(part for part in (text, " ".join(extra.split()), params, ctx, "купить") if part)[:200]
+
+
+# Код объекта в начале раздела («ДОО — …», «СОШ: …») сужал бы выдачу к профильным сайтам
+# (детсадовским — к игрушкам); в запрос берём только помещение после него.
+_OBJECT_PREFIX = re.compile(r"^\s*(?:до[оу]?|оу|мб?до[оу]?|гб?до[оу]?|мб?оу|гб?оу|сош|школ[аы]|детский\s+сад|д/с|пищеблок|больниц[аы]|ясли)\b[\s—–:,.\-]*", re.I)
+
+
+def room_context(section: str) -> str:
+    """Короткий контекст помещения для запроса: «ДОО — музыкальный зал» → «музыкальный зал».
+    Пусто, если в разделе только код объекта или ничего полезного."""
+    s = " ".join(str(section).split())
+    s = _OBJECT_PREFIX.sub("", s).strip(" —–:,.-")
+    return s[:60] if any(ch.isalpha() for ch in s) else ""
 
 
 def host_of(url: str) -> str:
@@ -158,16 +174,21 @@ class WebPriceSearch:
 
     # ---------- поиск ----------
 
-    def find(self, name: str, description: str, unit: str, today: str, params: Iterable[SearchParam] = ()) -> list[DiscoveredPage]:
+    def find(self, name: str, description: str, unit: str, today: str, params: Iterable[SearchParam] = (), section: str = "") -> list[DiscoveredPage]:
         """Страницы магазинов с предложениями по позиции; найденное сразу уходит в индекс.
-        Сначала запрос с параметрами оператора и из характеристик, если по нему цен нет — только
-        с параметрами оператора, потом просто название (подходящее отберёт сверка в индексе)."""
+        Сначала запрос с помещением (из спецификации) и параметрами оператора — чтобы
+        неоднозначное название искалось в нужном смысле; если по нему цен нет, помещение и
+        характеристики постепенно убираются, в конце — просто название (подходящее отберёт сверка
+        в индексе)."""
         manual = parse_params(params)
+        ctx = room_context(section)
         queries: list[str] = []
         for query in (
-            build_query(name, f"{description} {manual.numeric_text}", manual.query()),
+            build_query(name, "", manual.query(), ctx),  # как ищет человек: название + помещение, без габаритов
+            build_query(name, f"{description} {manual.numeric_text}", manual.query(), ctx),  # + характеристики и помещение
+            build_query(name, f"{description} {manual.numeric_text}", manual.query()),  # + характеристики
             build_query(name, manual.numeric_text, manual.query()),
-            build_query(name),
+            build_query(name),  # просто название
         ):
             if query not in queries:
                 queries.append(query)

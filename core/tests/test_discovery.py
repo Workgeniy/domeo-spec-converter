@@ -10,7 +10,7 @@ from app.main import app, internet_prices, supplier_index
 from app.models import SearchParam
 from app.pricing.internet import AutoSearchProvider
 from app.pricing.suppliers.crawler import CrawlResult
-from app.pricing.suppliers.discovery import WebPriceSearch, build_query, is_shop_candidate, site_name_of
+from app.pricing.suppliers.discovery import WebPriceSearch, build_query, is_shop_candidate, room_context, site_name_of
 from app.pricing.suppliers.extract import Extracted
 from app.pricing.suppliers.index import SupplierIndex
 from app.pricing.websearch import SearchHit
@@ -73,26 +73,59 @@ class ParamAwareEngine(FakeEngine):
         return super().search(query, max_results)
 
 
-def test_query_with_parameters_falls_back_to_plain(tmp_path: Path) -> None:
+def test_query_prefers_human_query_then_falls_back_to_sizes(tmp_path: Path) -> None:
+    # Сначала короткий «человеческий» запрос (название + помещение, без габаритов): на бесплатном
+    # поиске длинный запрос с габаритами часто не находит ничего. Габариты — как уточнение дальше.
     index = SupplierIndex(data_dir=tmp_path)
     index.set_settings(autocrawl_pages=0)
-    engine = ParamAwareEngine()
+    engine = ParamAwareEngine()  # запрос с габаритами («…x…») ничего не находит, без них — обычная выдача
     web = WebPriceSearch(engine, index, data_dir=tmp_path, client=_client([]), page_delay=0)
-    pages = web.find("Стул детский регулируемый по высоте №1-№3", "Стул детский, 350х340х260/300/340(h)", "шт.", "2026-09-25")
-    assert engine.queries[0] == "Стул детский регулируемый по высоте №1-№3 350x340x260 купить"
-    assert engine.queries[1] == "Стул детский регулируемый по высоте №1-№3 купить"
+    pages = web.find("Стул детский регулируемый по высоте №1-№3", "Стул детский, 350х340х260/300/340(h)", "шт.", "2026-09-25", section="ДОО — групповая")
+    assert engine.queries[0] == "Стул детский регулируемый по высоте №1-№3 групповая купить"  # название + помещение, без габаритов
     assert [p.host for p in pages if p.offers] == ["mebel-sad.test", "parta-plus.test"]
-    assert web.cached_queries == 2  # обе попытки запомнены, повтор их не тронет
+    assert web.cached_queries == 1
+
+    # Если по короткому запросу пусто — в ход идут габариты.
+    class RoomEmpty(FakeEngine):
+        def search(self, query: str, max_results: int = 8) -> list[SearchHit]:
+            self.queries.append(query)
+            return [] if "x" not in query else FakeEngine().search(query, max_results)
+
+    e2 = RoomEmpty()
+    web2 = WebPriceSearch(e2, index, data_dir=tmp_path / "d2", client=_client([]), page_delay=0)
+    web2.find("Стул детский регулируемый по высоте №1-№3", "Стул детский, 350х340х260/300/340(h)", "шт.", "2026-09-25")
+    assert e2.queries[0] == "Стул детский регулируемый по высоте №1-№3 купить"  # человеческий — пусто
+    assert e2.queries[1] == "Стул детский регулируемый по высоте №1-№3 350x340x260 купить"  # габариты
 
 
 def test_helpers() -> None:
     assert build_query("  Стул   детский ") == "Стул детский купить"
     assert build_query("Стеллаж с перфорированными полками", "Стеллаж, 2000х1000х400(h), 4 полки") == "Стеллаж с перфорированными полками 2000x1000x400 купить"
+    # Помещение из спецификации уточняет неоднозначное название.
+    assert build_query("Музыкальный центр", "", "", "музыкальный зал") == "Музыкальный центр музыкальный зал купить"
+    # room_context убирает код объекта в начале раздела (он сузил бы выдачу), оставляет помещение.
+    assert room_context("ДОО — музыкальный зал") == "музыкальный зал"
+    assert room_context("ДОУ: пищеблок") == "пищеблок" and room_context("Школа — спортивный зал") == "спортивный зал"
+    assert room_context("Мебель") == "Мебель" and room_context("ДОО —") == "" and room_context("") == ""
     assert is_shop_candidate("https://mebel-sad.test/catalog/1") and not is_shop_candidate("https://www.ozon.ru/x") and not is_shop_candidate("https://a.test/f.pdf")
     assert site_name_of(PRODUCT) == "Мебель-Сад" and site_name_of(PRODUCT2) == "Парта-Плюс" and site_name_of("<html><title>Просто</title></html>") == ""
     # Хвост заголовка-слогана — не имя магазина: возьмут хост.
     assert site_name_of("<html><title>Мойка — купить мойку из нержавеющей стали от производителя</title></html>") == ""
     assert site_name_of("<html><title>Шкаф | Холодильный шкаф 700 л, 0…+6 °C</title></html>") == ""
+
+
+def test_room_context_goes_into_web_query(tmp_path: Path) -> None:
+    index = SupplierIndex(data_dir=tmp_path)
+    index.set_settings(autocrawl_pages=0, min_shops=5)
+    engine = FakeEngine()
+    web = WebPriceSearch(engine, index, data_dir=tmp_path, client=_client([]), page_delay=0)
+    web.find("Музыкальный центр", "", "шт.", "2026-10-23", section="ДОО — музыкальный зал")
+    assert engine.queries[0] == "Музыкальный центр музыкальный зал купить"  # помещение — в первом запросе
+    # Через авто-провайдер помещение тоже доходит до поисковика.
+    engine2 = FakeEngine()
+    web2 = WebPriceSearch(engine2, index, data_dir=tmp_path / "b", client=_client([]), page_delay=0)
+    AutoSearchProvider(index, web2).lookup("Музыкальный центр", "", "шт.", "2026-10-23", section="ДОО — музыкальный зал")
+    assert engine2.queries and "музыкальный зал" in engine2.queries[0]
 
 
 def test_web_search_fills_index_and_caches(tmp_path: Path) -> None:
