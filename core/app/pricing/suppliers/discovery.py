@@ -13,7 +13,7 @@ import os
 import re
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date
@@ -160,11 +160,14 @@ class WebPriceSearch:
 
     # ---------- поиск ----------
 
-    def find(self, name: str, description: str, unit: str, today: str, params: Iterable[SearchParam] = ()) -> list[DiscoveredPage]:
+    def find(self, name: str, description: str, unit: str, today: str, params: Iterable[SearchParam] = (),
+             enough: Callable[[], bool] | None = None) -> list[DiscoveredPage]:
         """Страницы магазинов с предложениями по позиции; найденное сразу уходит в индекс.
-        Сначала короткий «человеческий» запрос (название + параметры оператора, без габаритов) —
-        длинный запрос с размерами на бесплатном поиске часто не находит ничего; если по нему цен
-        нет, в ход идут характеристики, в конце — просто название (подходящее отберёт сверка в индексе)."""
+        Лестница запросов: название (+объём, если есть) → только название → с характеристиками.
+        Каждый вариант пробуется, его предложения добавляются в индекс, и если задан ``enough`` —
+        перебор идёт, пока он не вернёт True (т.е. в индексе появился ПОДХОДЯЩИЙ товар, прошедший
+        матчер), а не до первой любой страницы: иначе мусорная рубрика оборвала бы лестницу. Без
+        ``enough`` (поиск по модели/истории) останавливаемся на первой странице с предложениями."""
         manual = parse_params(params)
         hint = extract_params(description).search_hint()  # ходовой параметр: объём/диаметр/мощность (не габариты)
         queries: list[str] = []
@@ -180,11 +183,11 @@ class WebPriceSearch:
         pages: list[DiscoveredPage] = []
         for query in queries:
             pages = self._search(query, today)
-            if any(page.offers for page in pages):
-                break
-        for page in pages:
-            if page.offers:
+            found = [page for page in pages if page.offers]
+            for page in found:
                 self.index.discover(page.host, page.site_name, query, page.offers)
+            if found and (enough is None or enough()):
+                break  # подходящий товар найден (или не задан критерий) — дальше не перебираем
         return pages
 
     def _search(self, query: str, today: str) -> list[DiscoveredPage]:

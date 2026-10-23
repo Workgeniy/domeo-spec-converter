@@ -353,7 +353,8 @@ class AutoSearchProvider:
                 self.web.find(model.query(head), "", unit, today)  # «шкаф Polair CM107-S купить»
                 ranked = rank()
             if self.index.matched_shops(ranked, strict) < self.index.min_shops:
-                self.web.find(name, description, unit, today, params)  # найденное само ложится в индекс
+                # перебираем варианты запроса, пока матчер не найдёт подходящий товар, а не любую страницу
+                self.web.find(name, description, unit, today, params, enough=lambda: self.index.matched_shops(rank(), strict) >= 1)
                 ranked = rank()
         except Exception as exc:  # noqa: BLE001 — сбой поисковика не должен ронять пачку
             base.comment = f"{base.comment}; автопоиск не ответил: {str(exc)[:120]}".strip("; ")

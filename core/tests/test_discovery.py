@@ -108,6 +108,40 @@ def test_helpers() -> None:
     assert site_name_of("<html><title>Шкаф | Холодильный шкаф 700 л, 0…+6 °C</title></html>") == ""
 
 
+def test_find_escalates_past_junk_until_match(tmp_path: Path) -> None:
+    # Первый запрос отдаёт мусорную рубрику «Столы» (не проходит матчер), второй — настоящий товар.
+    # С критерием enough перебор не обрывается на мусоре, а доходит до подходящего.
+    junk = '<html><head><script type="application/ld+json">{"@type":"Product","name":"Столы","offers":{"@type":"Offer","price":"990","priceCurrency":"RUB"}}</script></head><body></body></html>'
+    real = '<html><head><script type="application/ld+json">{"@type":"Product","name":"Стол письменный 1200х600","offers":{"@type":"Offer","price":"5400","priceCurrency":"RUB"}}</script></head><body></body></html>'
+
+    class Ladder:
+        name = "fake-search"
+
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        def search(self, query: str, max_results: int = 8) -> list[SearchHit]:
+            self.queries.append(query)
+            url = "https://real.test/stol" if "x" in query else "https://junk.test/stoly"  # габариты → настоящий товар
+            return [SearchHit(url=url, title="t")]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url.endswith("robots.txt"):
+            return httpx.Response(200, headers={"content-type": "text/plain"}, content=b"")
+        body = real if "real.test" in url else junk
+        return httpx.Response(200, headers={"content-type": "text/html"}, content=body.encode("utf-8"))
+
+    index = SupplierIndex(data_dir=tmp_path)
+    index.set_settings(autocrawl_pages=0, min_shops=1)
+    engine = Ladder()
+    web = WebPriceSearch(engine, index, data_dir=tmp_path, client=httpx.Client(transport=httpx.MockTransport(handler)), page_delay=0)
+    enough = lambda: index.matched_shops(index.rank("Стол", "Стол, 1200х600х750")) >= 1  # noqa: E731
+    web.find("Стол", "Стол, 1200х600х750", "шт.", "2026-09-25", enough=enough)
+    assert engine.queries == ["Стол купить", "Стол 1200x600x750 купить"]  # не застряли на мусорной рубрике
+    assert index.matched_shops(index.rank("Стол", "Стол, 1200х600х750")) >= 1  # нашёлся подходящий товар
+
+
 def test_web_search_fills_index_and_caches(tmp_path: Path) -> None:
     index = SupplierIndex(data_dir=tmp_path)
     index.set_settings(autocrawl_pages=0)  # без автообхода
