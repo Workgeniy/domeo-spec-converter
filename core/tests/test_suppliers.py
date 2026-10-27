@@ -290,10 +290,12 @@ def test_toy_offer_does_not_price_equipment(tmp_path: Path) -> None:
         [
             Extracted(name="Музыкальный центр Sony Hi-Fi аудиосистема", price=15990),
             Extracted(name="Музыкальный центр детский развивающий, игрушка", price=500),
+            Extracted(name="Матрёшка 5 в 1 развивающая игрушка", price=800),
+            Extracted(name="Кукла крупная в одежде, игрушка", price=1200),
         ],
         "карта сайта",
     )
-    # Оборудование (не игрушка): детская игрушка с тем же названием цену не задаёт, остаётся «похожим».
+    # Оборудование (бытовой прибор): детская игрушка с тем же названием цену не задаёт, остаётся «похожим».
     eq = index.lookup("Музыкальный центр", "для музыкального зала", "шт.", "2026-10-23")
     assert eq.price == 15990
     assert [(o.title, o.analog) for o in eq.offers] == [
@@ -303,6 +305,10 @@ def test_toy_offer_does_not_price_equipment(tmp_path: Path) -> None:
     # Если сама позиция — игрушка, игрушки в предложениях уместны (засчитываются).
     toy = index.lookup("Музыкальный центр развивающая игрушка", "", "шт.", "2026-10-23")
     assert toy.price is not None and 500 in [o.price for o in toy.offers if not o.analog]
+    # В заказе для детсада сама позиция — игрушка, хотя слова «игрушка» в названии нет: предложение-
+    # игрушку глушить нельзя, иначе у позиции не окажется цены и общая сумма занизится.
+    assert index.lookup("Матрёшка", "", "шт.", "2026-10-23").price == 800
+    assert index.lookup("Кукла крупного размера", "", "шт.", "2026-10-23").price == 1200
 
 
 def test_operator_params_pick_offers_and_price(tmp_path: Path) -> None:

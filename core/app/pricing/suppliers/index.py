@@ -78,15 +78,30 @@ NOTE_PARAMS_CONFLICT = "параметры не совпали"
 NOTE_PARAMS_UNKNOWN = "параметры не указаны"
 NOTE_CATEGORY = "похоже на детскую игрушку — другой тип товара"
 PLURAL_ENDINGS = ("ы", "и", "ья")  # стулья, столы, стеллажи — так магазины называют разделы каталога
-# Товар для оснащения помещения — оборудование, а не игрушка с тем же названием («музыкальный
-# центр» для зала vs детская игрушка). Если сама позиция не игрушка, а предложение явно игрушка,
-# не даём ему задавать цену (оставляем только как похожее). Маркеры узкие, чтобы не задеть
-# «развивающие пособия»/«детскую мебель», которые детсад закупает всерьёз.
-_TOY_MARKERS = re.compile(r"игрушк|развивающ", re.I)
+# Игрушечный «холодильник» или «музыкальный центр» (500–2000 ₽) не должен задавать цену
+# настоящему прибору. Но в заказах для детсада большинство позиций — сами игрушки и развивающие
+# пособия, причём часто без слова «игрушка» в названии («Матрёшка», «Кукла», «Конструктор»,
+# «Машина „Почта"»), и там игрушка в предложении уместна. Поэтому глушим игрушку в предложении
+# только у позиций, которые сами — бытовой прибор/оборудование, а не игровой предмет.
+_TOY_MARKERS = re.compile(r"игрушк|игрушеч|развивающ", re.I)  # предложение похоже на игрушку
+_PLAY_MARKERS = re.compile(r"игрушк|игрушеч|развивающ|игров|кукол|кукл", re.I)  # сама позиция — игровая
+_APPLIANCE_MARKERS = re.compile(  # бытовой прибор/оборудование, у которого бывает игрушечный двойник
+    r"холодильник|морозильн|музыкальн\w*\s+центр|магнитол|телевизор|проектор|монитор|"
+    r"пылесос|кондиционер|водонагрев|бойлер|обогреват|пароконвектомат|пароварк|посудомо|"
+    r"микроволнов|стиральн|кофемашин|кофеварк|мясорубк|блендер|миксер|тостер|"
+    r"плита|плиты|плите|плиту|духов|электроплит|варочн",
+    re.I,
+)
 
 
 def _is_toy(text: str) -> bool:
     return bool(_TOY_MARKERS.search(text))
+
+
+def _guard_toy(name: str, description: str) -> bool:
+    """Глушить ли игрушку в предложении: да, когда позиция — бытовой прибор и при этом не сама
+    игровая («музыкальный центр» для зала — да; «игровой модуль „Кухня" с плитой» — нет)."""
+    return bool(_APPLIANCE_MARKERS.search(name)) and not _PLAY_MARKERS.search(f"{name} {description}")
 
 
 class Ranked(NamedTuple):
@@ -185,7 +200,7 @@ class OfferMatcher:
         section_key = section.strip().lower()
         own_loose = analyze_name(name).loose
         same_model = self.model_hits(model, name)
-        query_toy = _is_toy(f"{name} {description}")  # сама позиция — игрушка (тогда игрушки в предложениях уместны)
+        guard_toy = _guard_toy(name, description)  # глушить ли игрушку в предложении (позиция — прибор, не игра)
         best: dict[int, Ranked] = {}
         for query_name, alias in [(name, ""), *((a, a) for a in aliases)]:
             info = analyze_name(query_name)
@@ -199,7 +214,7 @@ class OfferMatcher:
             for i in candidates:
                 if alias and not own_loose & self.offer_loose[i] and self.offer_heads[i]:
                     continue  # по чужому названию — только то, что хоть словом похоже на наше (или марка с моделью)
-                ranked = self._rank(i, info.key, query, (first, info.head_word), spec, described, manual, section_key, alias, i in same_model, query_toy)
+                ranked = self._rank(i, info.key, query, (first, info.head_word), spec, described, manual, section_key, alias, i in same_model, guard_toy)
                 if ranked is not None and (i not in best or ranked.score > best[i].score):
                     best[i] = ranked
         # При равном совпадении вперёд идёт модель из проекта, потом предложения с подтверждёнными
@@ -219,7 +234,7 @@ class OfferMatcher:
         section_key: str,
         alias: str,
         same_model: bool,
-        query_toy: bool = False,
+        guard_toy: bool = False,
     ) -> Ranked | None:
         score, common = self._score(key, query, i)
         if same_model:
@@ -256,8 +271,8 @@ class OfferMatcher:
                 note = NOTE_PARAMS_PARTIAL if missing else NOTE_PARAMS_MATCH
             else:
                 note = NOTE_PARAMS_UNKNOWN
-        if self.offer_toy[i] and not query_toy and not same_model:
-            # Детская игрушка для неигрушечной позиции («музыкальный центр» для зала) — другой тип
+        if self.offer_toy[i] and guard_toy and not same_model:
+            # Детская игрушка для бытового прибора («музыкальный центр» для зала) — другой тип
             # товара: цену не задаёт, остаётся только как похожее.
             score = min(score, round(MATCH_THRESHOLD - 0.01, 3))
             note = NOTE_CATEGORY
