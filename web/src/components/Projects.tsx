@@ -37,7 +37,7 @@ export function Projects({ onOpened }: { onOpened: () => void }) {
     </Group>
     {error && <Alert color="red">{error}</Alert>}
     {loading ? <Loader size="sm" /> : <>
-      {!rows.length && !error && <Text c="dimmed">Пока нет объектов. Загрузите спецификацию ниже — объект появится после разбора.</Text>}
+      {!rows.length && !error && <Text c="dimmed">Пока нет объектов. Загрузите спецификацию выше — объект появится после разбора.</Text>}
       {rows.slice(0, 30).map((row) => <Paper withBorder p="md" key={row.id}>
         <Group justify="space-between" align="flex-start">
           <Stack gap={3} style={{ flex: 1, minWidth: 200 }}>

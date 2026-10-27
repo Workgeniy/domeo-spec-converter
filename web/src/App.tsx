@@ -55,9 +55,10 @@ export default function App() {
           <Box pos="relative" mih={160}>
             <LoadingOverlay visible={busy} />
             {!busy && (hasDocuments ? <WorkspaceView key={`${projectId}-${workspaceKey}`} /> : <Stack gap="xl">
-              <Projects onOpened={() => setWorkspaceKey((n) => n + 1)} />
               <Divider label="Загрузить спецификацию для нового объекта" />
               <UploadPane onParsed={addDocument} />
+              <Divider />
+              <Projects onOpened={() => setWorkspaceKey((n) => n + 1)} />
             </Stack>)}
           </Box>
         </Container>
