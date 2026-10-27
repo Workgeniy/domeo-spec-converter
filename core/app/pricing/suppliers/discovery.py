@@ -118,8 +118,12 @@ class WebPriceSearch:
         self._robots: dict[str, robotparser.RobotFileParser] = {}
         self._lock = threading.Lock()
         self._save_lock = threading.Lock()  # параллельные поиски пишут кэш по очереди
-        self._fetch_lock = threading.Lock()
-        self._last_fetch = 0.0
+        # Вежливость к магазинам — по каждому хосту отдельно: страницы из выдачи с разных сайтов
+        # грузятся параллельно, один глобальный замок свёл бы это к очереди по всему сервису.
+        self._hosts_lock = threading.Lock()
+        self._host_locks: dict[str, threading.Lock] = {}
+        self._host_last: dict[str, float] = {}
+        self._save_at = 0.0  # кэш поиска пишем на диск не чаще раза в несколько секунд, а не после каждого запроса
 
     # ---------- кэш ----------
 
@@ -136,6 +140,17 @@ class WebPriceSearch:
             tmp = self.path.with_suffix(".tmp")
             tmp.write_text(payload, encoding="utf-8")
             tmp.replace(self.path)
+
+    def _save_throttled(self) -> None:
+        """На большой спецификации кэш пополняется тысячи раз; писать растущий файл после каждого
+        запроса — лишняя нагрузка. Сохраняем не чаще раза в несколько секунд (кэш, потеря
+        последних записей при сбое не критична — переищутся)."""
+        now = time.monotonic()
+        with self._lock:
+            if now - self._save_at < 3.0:
+                return
+            self._save_at = now
+        self.save()
 
     @property
     def cached_queries(self) -> int:
@@ -163,7 +178,9 @@ class WebPriceSearch:
     def find(self, name: str, description: str, unit: str, today: str, params: Iterable[SearchParam] = (),
              enough: Callable[[], bool] | None = None) -> list[DiscoveredPage]:
         """Страницы магазинов с предложениями по позиции; найденное сразу уходит в индекс.
-        Лестница запросов: название (+объём, если есть) → только название → с характеристиками.
+        Лестница запросов (короткая, чтобы не перегружать бесплатные движки): название + ходовой
+        параметр (объём, если есть) → только название → название + габариты из характеристик
+        (для родовых названий вроде «Стол»). Два дублирующих варианта из прежней лестницы убраны.
         Каждый вариант пробуется, его предложения добавляются в индекс, и если задан ``enough`` —
         перебор идёт, пока он не вернёт True (т.е. в индексе появился ПОДХОДЯЩИЙ товар, прошедший
         матчер), а не до первой любой страницы: иначе мусорная рубрика оборвала бы лестницу. Без
@@ -172,11 +189,9 @@ class WebPriceSearch:
         hint = extract_params(description).search_hint()  # ходовой параметр: объём/диаметр/мощность (не габариты)
         queries: list[str] = []
         for query in (
-            build_query(name, "", f"{manual.query()} {hint}".strip()),  # как ищет человек: название + объём (если есть)
-            build_query(name, "", manual.query()),  # просто название
-            build_query(name, f"{description} {manual.numeric_text}", manual.query()),  # + все характеристики (габариты)
-            build_query(name, manual.numeric_text, manual.query()),
-            build_query(name),
+            build_query(name, "", f"{manual.query()} {hint}".strip()),  # как ищет человек: название + ходовой параметр (объём/диаметр/мощность)
+            build_query(name, "", manual.query()),  # просто название (+ параметры оператора, если заданы)
+            build_query(name, f"{description} {manual.numeric_text}", manual.query()),  # + габариты из характеристик — для родовых названий («Стол», «Шкаф»)
         ):
             if query not in queries:
                 queries.append(query)
@@ -201,7 +216,7 @@ class WebPriceSearch:
                 "searched_at": today,
                 "pages": [{"url": p.url, "host": p.host, "site_name": p.site_name, "offers": [o.__dict__ for o in p.offers]} for p in pages],
             }
-        self.save()
+        self._save_throttled()
         return pages
 
     def _read_pages(self, hits: list[SearchHit]) -> list[DiscoveredPage]:
@@ -235,11 +250,14 @@ class WebPriceSearch:
     # ---------- сеть ----------
 
     def _get(self, url: str) -> httpx.Response | None:
-        with self._fetch_lock:
-            wait = self.page_delay - (time.monotonic() - self._last_fetch)
+        host = host_of(url)
+        with self._hosts_lock:
+            lock = self._host_locks.setdefault(host, threading.Lock())
+        with lock:  # паузу держим только для одного хоста — разные магазины не ждут друг друга
+            wait = self.page_delay - (time.monotonic() - self._host_last.get(host, 0.0))
             if wait > 0:
                 time.sleep(wait)
-            self._last_fetch = time.monotonic()
+            self._host_last[host] = time.monotonic()
         try:
             response = self.client.get(url)
         except httpx.HTTPError:

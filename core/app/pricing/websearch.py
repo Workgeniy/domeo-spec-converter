@@ -80,12 +80,26 @@ class SearxngEngine:
 
     name = "searxng"
 
-    def __init__(self, base_url: str, client: httpx.Client | None = None):
+    def __init__(self, base_url: str, client: httpx.Client | None = None, min_interval: float = 0.0):
         self.base_url = base_url.rstrip("/")
         self.client = client or httpx.Client(timeout=20.0)
+        # Свой SearXNG — не публичный движок: общий троттл 1.5 с (против капчи) здесь не нужен,
+        # иначе теряется весь смысл. При желании можно задать небольшой интервал через окружение.
+        self.min_interval = max(0.0, min_interval)
+        self._lock = threading.Lock()
+        self._last = 0.0
+
+    def _wait(self) -> None:
+        if self.min_interval <= 0:
+            return
+        with self._lock:
+            wait = self.min_interval - (time.monotonic() - self._last)
+            if wait > 0:
+                time.sleep(wait)
+            self._last = time.monotonic()
 
     def search(self, query: str, max_results: int = 8) -> list[SearchHit]:
-        _throttle()
+        self._wait()
         response = self.client.get(f"{self.base_url}/search", params={"q": query, "format": "json", "language": "ru-RU", "categories": "general"})
         response.raise_for_status()
         results = response.json().get("results", [])
@@ -99,7 +113,7 @@ def engine_from_env() -> SearchEngine | None:
         return None
     searxng = os.environ.get("SEARXNG_URL", "").strip()
     if searxng and choice in ("", "searxng"):
-        return SearxngEngine(searxng)
+        return SearxngEngine(searxng, min_interval=float(os.environ.get("SEARXNG_MIN_INTERVAL", "0") or "0"))
     if choice in ("", "ddgs"):
         try:
             return DdgsEngine(backend=os.environ.get("WEB_SEARCH_BACKEND", "auto").strip() or "auto")
