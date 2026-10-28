@@ -2,8 +2,12 @@
 
 Движок — за протоколом ``SearchEngine``: ``DdgsEngine`` (библиотека ddgs: DuckDuckGo, Bing,
 Яндекс и другие без ключей; режим ``auto`` сам перебирает источники) или свой SearXNG
-(``SEARXNG_URL``). Запросы к поисковику идут не чаще одного раза в полторы секунды на
-весь сервис — иначе бесплатные движки начинают отвечать капчей.
+(``SEARXNG_URL``). Запросы к ddgs идут не чаще одного раза в полторы секунды на весь сервис —
+иначе бесплатные движки начинают отвечать капчей; свой SearXNG этим не ограничен.
+
+Если задан ``SEARXNG_URL``, основной движок — SearXNG, а при его сбое (контейнер/Docker
+выключен) запросы автоматически уходят на ddgs (``FallbackEngine``), чтобы цены не переставали
+грузиться. Отключить запасной: ``WEB_SEARCH_FALLBACK=off``.
 """
 
 from __future__ import annotations
@@ -106,17 +110,50 @@ class SearxngEngine:
         return [SearchHit(url=r["url"], title=r.get("title", ""), snippet=r.get("content", "")) for r in results[:max_results] if r.get("url")]
 
 
+class FallbackEngine:
+    """Основной движок, при сбое соединения — запасной: свой SearXNG упал или Docker выключен →
+    ищем через ddgs, чтобы цены не переставали грузиться. После сбоя основного некоторое время
+    (``cooldown``) ходим сразу в запасной, не бьёмся в недоступный сервис на каждой позиции; по
+    истечении паузы снова пробуем основной — вдруг поднялся. Пустая выдача сбоем не считается."""
+
+    def __init__(self, primary: SearchEngine, secondary: SearchEngine, cooldown: float = 60.0):
+        self.primary = primary
+        self.secondary = secondary
+        self.cooldown = cooldown
+        self.name = f"{primary.name}→{secondary.name}"
+        self._down_until = 0.0
+        self._lock = threading.Lock()
+
+    def search(self, query: str, max_results: int = 8) -> list[SearchHit]:
+        with self._lock:
+            use_primary = time.monotonic() >= self._down_until
+        if use_primary:
+            try:
+                return self.primary.search(query, max_results)
+            except Exception:  # noqa: BLE001 — основной недоступен: уходим на запасной
+                with self._lock:
+                    self._down_until = time.monotonic() + self.cooldown
+        return self.secondary.search(query, max_results)
+
+
 def engine_from_env() -> SearchEngine | None:
     """WEB_SEARCH_ENGINE: off | searxng | ddgs; по умолчанию SearXNG, если задан SEARXNG_URL, иначе ddgs."""
     choice = os.environ.get("WEB_SEARCH_ENGINE", "").strip().lower()
     if choice == "off":
         return None
     searxng = os.environ.get("SEARXNG_URL", "").strip()
+    backend = os.environ.get("WEB_SEARCH_BACKEND", "auto").strip() or "auto"
     if searxng and choice in ("", "searxng"):
-        return SearxngEngine(searxng, min_interval=float(os.environ.get("SEARXNG_MIN_INTERVAL", "0") or "0"))
+        primary = SearxngEngine(searxng, min_interval=float(os.environ.get("SEARXNG_MIN_INTERVAL", "0") or "0"))
+        if os.environ.get("WEB_SEARCH_FALLBACK", "").strip().lower() in ("0", "off", "no", "false"):
+            return primary  # запасной явно отключён
+        try:
+            return FallbackEngine(primary, DdgsEngine(backend=backend))  # SearXNG недоступен → ddgs
+        except ImportError:
+            return primary  # ddgs не установлен — только SearXNG
     if choice in ("", "ddgs"):
         try:
-            return DdgsEngine(backend=os.environ.get("WEB_SEARCH_BACKEND", "auto").strip() or "auto")
+            return DdgsEngine(backend=backend)
         except ImportError:
             return None
     return None
