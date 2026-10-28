@@ -77,6 +77,7 @@ NOTE_PARAMS_PARTIAL = "параметры совпали не все: часть
 NOTE_PARAMS_CONFLICT = "параметры не совпали"
 NOTE_PARAMS_UNKNOWN = "параметры не указаны"
 NOTE_CATEGORY = "похоже на детскую игрушку — другой тип товара"
+NOTE_USED = "б/у — не новый товар"
 PLURAL_ENDINGS = ("ы", "и", "ья")  # стулья, столы, стеллажи — так магазины называют разделы каталога
 # Игрушечный «холодильник» или «музыкальный центр» (500–2000 ₽) не должен задавать цену
 # настоящему прибору. Но в заказах для детсада большинство позиций — сами игрушки и развивающие
@@ -102,6 +103,15 @@ def _guard_toy(name: str, description: str) -> bool:
     """Глушить ли игрушку в предложении: да, когда позиция — бытовой прибор и при этом не сама
     игровая («музыкальный центр» для зала — да; «игровой модуль „Кухня" с плитой» — нет)."""
     return bool(_APPLIANCE_MARKERS.search(name)) and not _PLAY_MARKERS.search(f"{name} {description}")
+
+
+# Б/у, бывший в употреблении — для тендера нужен новый товар, такую цену не берём («Пожарная
+# машина б/у» за 75 000 ₽ не должна задавать цену игрушечной пожарной машине).
+_USED_MARKERS = re.compile(r"\bб\s*[/\\.]\s*у\b|бывш\w*\s+в\s+употреб", re.I)
+
+
+def _is_used(text: str) -> bool:
+    return bool(_USED_MARKERS.search(text))
 
 
 class Ranked(NamedTuple):
@@ -134,6 +144,7 @@ class OfferMatcher:
         self.offer_codes: list[tuple[str, ...]] = []  # слова названия как коды моделей
         self.offer_compact: list[str] = []  # они же слитно — быстрый отбор по коду модели
         self.offer_toy: list[bool] = []  # предложение похоже на детскую игрушку
+        self.offer_used: list[bool] = []  # предложение — б/у товар
         self.add(offers or [])
 
     def add(self, offers: list[SupplierOffer]) -> None:
@@ -154,6 +165,7 @@ class OfferMatcher:
             self.offer_codes.append(codes)
             self.offer_compact.append("".join(codes))
             self.offer_toy.append(_is_toy(title))
+            self.offer_used.append(_is_used(title))
             for t in info.stems:
                 self.index[t].add(i)
 
@@ -219,7 +231,7 @@ class OfferMatcher:
                     best[i] = ranked
         # При равном совпадении вперёд идёт модель из проекта, потом предложения с подтверждёнными
         # параметрами, потом без указанных.
-        order = {NOTE_PARAMS_MATCH: 0, NOTE_PARAMS_PARTIAL: 1, "": 2, NOTE_PARAMS_UNKNOWN: 2, NOTE_PARAMS_CONFLICT: 3, NOTE_CATEGORY: 3}
+        order = {NOTE_PARAMS_MATCH: 0, NOTE_PARAMS_PARTIAL: 1, "": 2, NOTE_PARAMS_UNKNOWN: 2, NOTE_PARAMS_CONFLICT: 3, NOTE_CATEGORY: 3, NOTE_USED: 3}
         return sorted(best.values(), key=lambda r: (-r.score, not r.model, not r.confirmed, order[r.note], -r.matched, r.offer.price))
 
     def _rank(
@@ -276,6 +288,10 @@ class OfferMatcher:
             # товара: цену не задаёт, остаётся только как похожее.
             score = min(score, round(MATCH_THRESHOLD - 0.01, 3))
             note = NOTE_CATEGORY
+        if self.offer_used[i] and not same_model:
+            # Б/у — не новый товар: цену для тендера не задаёт, остаётся только как похожее.
+            score = min(score, round(MATCH_THRESHOLD - 0.01, 3))
+            note = NOTE_USED
         if score >= MATCH_THRESHOLD and not same_model and not self._same_item(query, head, common, i):
             score = round(MATCH_THRESHOLD - 0.01, 3)  # слова похожи, товар другой — в цену не входит
         return Ranked(offer, score, note, alias, confirmed, same_model, matches) if score >= ANALOG_THRESHOLD else None

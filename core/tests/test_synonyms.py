@@ -21,6 +21,7 @@ def test_dictionary() -> None:
     assert tokens("Полка навесная") == tokens("Полка настенная")
     assert tokens("Мойка нерж.") == tokens("Мойка нержавеющая")
     assert tokens("Водоумягчитель") == tokens("Смягчитель воды")
+    assert tokens("Кукольная коляска") == tokens("Коляска для кукол")  # прилагательное ↔ своё слово
 
 
 def test_different_words_stay_different() -> None:

@@ -311,6 +311,26 @@ def test_toy_offer_does_not_price_equipment(tmp_path: Path) -> None:
     assert index.lookup("Кукла крупного размера", "", "шт.", "2026-10-23").price == 1200
 
 
+def test_used_offer_does_not_set_price(tmp_path: Path) -> None:
+    index = SupplierIndex(data_dir=tmp_path)
+    shop = index.add("Магазин", "shop.test")
+    index.set_offers(
+        shop.id,
+        [
+            Extracted(name="Пожарная машина б/у", price=75000),  # настоящая машина б/у — не для тендера
+            Extracted(name="Пожарная машина игрушка инерционная", price=450),  # игрушка — её и берём
+            Extracted(name="Коляска для кукол прогулочная", price=1290),
+        ],
+        "карта сайта",
+    )
+    # Б/у не задаёт цену: берётся игрушечная пожарная машина, а не настоящая за 75 000.
+    fire = index.lookup("Машина «Пожарная»", "Материал: пластик. Длина 150-250 мм.", "шт.", "2026-10-28")
+    assert fire.price == 450
+    assert ("Пожарная машина б/у", True) in [(o.title, o.analog) for o in fire.offers]  # б/у показан как похожее
+    # «Кукольная коляска» ↔ «Коляска для кукол»: основа прилагательного связана с существительным.
+    assert index.lookup("Кукольная коляска", "", "шт.", "2026-10-28").price == 1290
+
+
 def test_operator_params_pick_offers_and_price(tmp_path: Path) -> None:
     index = SupplierIndex(data_dir=tmp_path)
     shop = index.add("Мебель-Опт", "mebel-opt.test")

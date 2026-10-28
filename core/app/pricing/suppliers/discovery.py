@@ -37,6 +37,8 @@ SKIP_HOSTS = (
     "sbermegamarket.ru", "lamoda.ru", "youtube.com", "youtu.be", "wikipedia.org", "dzen.ru", "vk.com", "ok.ru", "t.me",
     "pinterest.", "2gis.", "google.", "facebook.com", "instagram.com", "rutube.ru", "otzovik.com", "irecommend.ru",
     "yell.ru", "zoon.ru", "gosuslugi.ru", "zakupki.gov.ru", "kontur.ru", "rusprofile.ru", "list-org.com", "yandex.com",
+    # Авто-барахолки и спецтехника: «Машина Пожарная» (игрушка) не должна цепляться к настоящему авто б/у.
+    "drom.ru", "auto.ru", "drive2.ru",
 )
 SKIP_EXT = re.compile(r"\.(pdf|doc|docx|xls|xlsx|zip|rar|jpg|jpeg|png|gif|webp)$", re.I)
 MAX_HITS = 8
