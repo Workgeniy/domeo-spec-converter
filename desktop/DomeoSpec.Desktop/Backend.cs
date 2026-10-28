@@ -55,6 +55,9 @@ public sealed class Backend : IAsyncDisposable
         try
         {
             await WaitHealthy($"http://127.0.0.1:{apiPort}/api/specifications/health", ct);
+            // API поднялся, но ядро (Python) слушает позже — дожидаемся и его, иначе первый
+            // разбор уйдёт в неподнятое ядро и вернётся «Ядро разбора недоступно».
+            await WaitCoreReady(corePort, status, ct);
             DiagLog.Log("health OK — интерфейс готов");
         }
         catch (Exception ex) { DiagLog.Log($"health НЕ дождались: {ex.Message}"); throw; }
@@ -102,13 +105,16 @@ public sealed class Backend : IAsyncDisposable
         }
         psi.Environment["DATA_DIR"] = Path.Combine(DataDir, "core-data");
         psi.Environment["PRICE_SEARCH_PROVIDER"] = "auto";
+        // Вывод ядра (предупреждения/трейсбеки) — в UTF-8, чтобы в core.log не было крокозябр.
+        psi.Environment["PYTHONUTF8"] = "1";
+        psi.Environment["PYTHONIOENCODING"] = "utf-8";
         var tess = Path.Combine(_root, "tesseract");
         if (Directory.Exists(tess)) // OCR сканов: бинарник в PATH, языковые данные — через TESSDATA_PREFIX
         {
             psi.Environment["PATH"] = tess + ";" + Environment.GetEnvironmentVariable("PATH");
             psi.Environment["TESSDATA_PREFIX"] = tess;
         }
-        Launch(psi);
+        Launch(psi, Path.Combine(DataDir, "core.log"));
     }
 
     private void StartApi(int apiPort, int corePort, string? conn)
@@ -139,11 +145,33 @@ public sealed class Backend : IAsyncDisposable
         Launch(psi);
     }
 
-    private void Launch(ProcessStartInfo psi)
+    private readonly object _logLock = new();
+
+    // logFile задан — перенаправляем вывод процесса (stdout+stderr) в этот файл. Нужно для ядра:
+    // его предупреждения и трейсбеки иначе уходят в никуда (CreateNoWindow, без консоли), и сбой
+    // «Ядро разбора недоступно» разобрать нечем. Уровень логов ядра — warning, поток тихий.
+    private void Launch(ProcessStartInfo psi, string? logFile = null)
     {
         psi.UseShellExecute = false;
         psi.CreateNoWindow = true;
-        _procs.Add(Process.Start(psi) ?? throw new InvalidOperationException($"не удалось запустить {psi.FileName}"));
+        if (logFile is not null)
+        {
+            psi.RedirectStandardOutput = true;
+            psi.RedirectStandardError = true;
+            try { File.WriteAllText(logFile, $"=== запуск {DateTime.Now:yyyy-MM-dd HH:mm:ss} ===\r\n"); } catch { /* лог не критичен */ }
+        }
+        var proc = Process.Start(psi) ?? throw new InvalidOperationException($"не удалось запустить {psi.FileName}");
+        _procs.Add(proc);
+        if (logFile is null) return;
+        void Append(string? line)
+        {
+            if (line is null) return;
+            lock (_logLock) { try { File.AppendAllText(logFile, line + "\r\n"); } catch { /* лог не критичен */ } }
+        }
+        proc.OutputDataReceived += (_, e) => Append(e.Data);
+        proc.ErrorDataReceived += (_, e) => Append(e.Data);
+        proc.BeginOutputReadLine();
+        proc.BeginErrorReadLine();
     }
 
     private static async Task WaitHealthy(string url, CancellationToken ct)
@@ -159,6 +187,32 @@ public sealed class Backend : IAsyncDisposable
             await Task.Delay(500, ct);
         }
         throw new TimeoutException("бэкенд не ответил вовремя");
+    }
+
+    // Ядро (Python + numpy/pymupdf) начинает слушать позже API, а на первом запуске свежей сборки
+    // его ещё и сканирует антивирус — поэтому ждём его health отдельно, до полутора минут. Иначе
+    // интерфейс открывался бы, пока ядро не поднялось, и первый разбор возвращал «Ядро разбора
+    // недоступно». Не дождались — всё равно открываем интерфейс: приложение работает урезанно
+    // (оригинал сохраняется, разбор можно повторить из «Документов»), ядро обычно слушает следом.
+    private static async Task WaitCoreReady(int corePort, Action<string> status, CancellationToken ct)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        var url = $"http://127.0.0.1:{corePort}/api/health";
+        for (var i = 0; i < 180 && !ct.IsCancellationRequested; i++)
+        {
+            try
+            {
+                if ((await http.GetAsync(url, ct)).IsSuccessStatusCode)
+                {
+                    DiagLog.Log($"ядро готово (health) за ~{i / 2}с");
+                    return;
+                }
+            }
+            catch { /* ядро ещё поднимается */ }
+            if (i == 6) status("Ядро разбора ещё готовится…");  // ~3с без ответа — успокаиваем пользователя
+            await Task.Delay(500, ct);
+        }
+        DiagLog.Log("ядро не ответило health вовремя — открываю интерфейс, разбор станет доступен позже");
     }
 
     private static int FreePort()
