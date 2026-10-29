@@ -20,6 +20,13 @@ from ..models import PageInfo, ParsedDocument, SpecItem
 from .aggregate import build_summary
 from .spec_parser import DOC_CODE_RE, TITLE_RE, _default_section, normalize_pos, parse_qty, short_name
 
+# Слова-приметы столбца наименования и разбор «товар» vs «работа»: в формах КП (ФПКП) бывают
+# ОТДЕЛЬНЫЕ столбцы «Наименование работы» (монтаж/установка) и «Наименование материала» (сам
+# товар). Совмещённый «Наименование работ и материалов» — один столбец (есть слово о товаре).
+NAME_HINTS = ("наимен", "название", "оборудован", "описан", "номенклат")
+GOODS_WORDS = ("материал", "товар", "издел", "продукц", "оборудован", "номенклат")  # столбец о товаре
+WORK_WORDS = ("работ", "услуг")  # столбец о работах/услугах — не наименование товара
+
 # Ключ столбца -> слова-приметы в заголовке (подстрока, в нижнем регистре). Порядок проверки
 # важен: «Наименование помещения» — это раздел, а не наименование, поэтому раздел ищем раньше.
 COLUMN_HINTS: list[tuple[str, tuple[str, ...]]] = [
@@ -34,7 +41,7 @@ COLUMN_HINTS: list[tuple[str, tuple[str, ...]]] = [
     ("doc", ("обознач",)),
     ("razdel", ("раздел",)),  # раздел КП («Мебель», «Спортивное оборудование»)
     ("group", ("помещ",)),  # помещение («Групповая комната…»)
-    ("name", ("наимен", "название", "оборудован", "описан", "номенклат")),
+    ("name", NAME_HINTS),
     # Характеристики отдельным столбцом («Технические характеристики») — в описание позиции.
     # Ищется после «name», чтобы совмещённый столбец «Наименование и тех. характеристика»
     # достался наименованию, а не характеристикам.
@@ -91,6 +98,18 @@ def _match_header(cells: list[str]) -> dict[str, int] | None:
             if i not in used and re.sub(r"\s+", "", label) in {"№", "№п/п"}:
                 mapping["ordinal"] = i  # признак отдельной строки, но не номер позиции в проекте
                 break
+    # Форма ФПКП: отдельные столбцы «Наименование работы» (монтаж/установка) и «Наименование
+    # материала» (товар). Наименование товара — из столбца материала, а не работы; характеристики
+    # товара в такой форме лежат в «Примечании» — уводим его в описание, а не в заметку. Если
+    # разделения нет (обычная спецификация или совмещённый «…работ и материалов») — ничего не меняем.
+    name_like = [i for i, c in enumerate(lower) if c and any(h in c for h in NAME_HINTS)]
+    pure_work = [i for i in name_like if any(w in lower[i] for w in WORK_WORDS) and not any(g in lower[i] for g in GOODS_WORDS)]
+    goods = [i for i in name_like if any(g in lower[i] for g in GOODS_WORDS)]
+    if pure_work and goods:
+        mapping["name"] = goods[0]
+        used.add(goods[0])
+        if "specs" not in mapping and "note" in mapping:
+            mapping["specs"] = mapping.pop("note")
     return mapping if all(k in mapping for k in REQUIRED) else None
 
 
