@@ -106,10 +106,10 @@ def _match_header(cells: list[str]) -> dict[str, int] | None:
     pure_work = [i for i in name_like if any(w in lower[i] for w in WORK_WORDS) and not any(g in lower[i] for g in GOODS_WORDS)]
     goods = [i for i in name_like if any(g in lower[i] for g in GOODS_WORDS)]
     if pure_work and goods:
-        mapping["name"] = goods[0]
+        mapping["name"] = goods[0]  # «Наименование материала» — тип/категория товара
         used.add(goods[0])
-        if "specs" not in mapping and "note" in mapping:
-            mapping["specs"] = mapping.pop("note")
+        if "note" in mapping:
+            mapping["item"] = mapping.pop("note")  # «Примечание» — сам товар (его подробность)
     return mapping if all(k in mapping for k in REQUIRED) else None
 
 
@@ -166,6 +166,32 @@ def _looks_like_section(text: str) -> bool:
     # Только у начала строки: помещение/раздел начинается с такого слова («Первый этаж»,
     # «Пом. 120 …», «Групповая …»), а у характеристики ключевое слово попадалось бы в середине.
     return bool(SECTION.search(text[:32]))
+
+
+_NOTE_REQUIREMENT = re.compile(r"\b(?:долж(?:ен|но|на|ны)|определя[ею]тся|соответству[ею]т)\b", re.I)
+
+
+def _item_from_note(raw: object) -> str:
+    """Наименование товара из «Примечания» формы ФПКП: первая непустая строка (дальше идут
+    требования к изделию/ГОСТ). Если товар и требования в одной строке — режем по началу
+    требований («…должен соответствовать»). Длинное — обрезаем по границе слова."""
+    line = ""
+    for ln in str(raw or "").splitlines():
+        s = " ".join(ln.split())
+        if s:
+            line = s
+            break
+    cut = len(line)
+    m = _NOTE_REQUIREMENT.search(line)
+    if m and m.start() >= 8:  # требование — начало характеристик; наименование до него
+        cut = min(cut, m.start())
+    dot = line.find(". ", 12)  # характеристика часто идёт новым предложением — режем по первой «. »
+    if dot != -1:
+        cut = min(cut, dot + 1)
+    line = line[:cut].rstrip(" .,:;–-")
+    if len(line) > 90:
+        line = line[:90].rsplit(" ", 1)[0] + "…"
+    return line
 
 
 def parse_xlsx(source: str | Path | bytes, file_name: str | None = None) -> ParsedDocument:
@@ -282,6 +308,16 @@ def _rows_to_items(
             pos = own_pos
             qty_raw = own_qty or _cell(row, mapping, "qty")  # количество может быть общим на группу (объединение)
             specs = _cell(row, mapping, "specs")
+            # Наименование и описание. В форме ФПКП товар — в «Примечании» (столбец «item»), а
+            # «Наименование материала» (name) — его тип/категория: наименование берём из товара, в
+            # описание кладём категорию и полный текст товара. В обычной спеке — наименование + specs.
+            if "item" in mapping:
+                raw_item = grid[r][mapping["item"]] if mapping["item"] < len(grid[r]) else None
+                display_name = _item_from_note(raw_item) or short_name(name)
+                description = f"{name} {_text(raw_item)}".strip()
+            else:
+                display_name = short_name(name)
+                description = f"{name} {specs}".strip()
             # Строка-нумерация столбцов под шапкой («1 2 3 … 10») — наименование из одних цифр,
             # не позиция.
             if name and not _HAS_LETTER.search(name):
@@ -302,8 +338,8 @@ def _rows_to_items(
                 page=1,
                 pos=pos,
                 pos_key=normalize_pos(pos),
-                description=f"{name} {specs}".strip(),  # наименование + характеристики из своего столбца
-                name=short_name(name),
+                description=description,  # наименование + характеристики (в ФПКП — категория + товар)
+                name=display_name,
                 type_mark=_cell(row, mapping, "type_mark") or _cell(row, mapping, "doc"),
                 code=_cell(row, mapping, "code"),
                 manufacturer=_cell(row, mapping, "manufacturer"),
@@ -321,7 +357,7 @@ def _rows_to_items(
                 current.warnings.append("нет номера позиции")
             elif not POS_OK.match(pos):
                 current.warnings.append(f"необычный номер позиции: «{pos}»")
-            if not name:
+            if not display_name:
                 current.warnings.append("пустое наименование")
             if not current.unit:
                 current.warnings.append("нет единицы измерения")
