@@ -12,6 +12,8 @@
     <AssemblyName>Domeo</AssemblyName>
     <RootNamespace>DomeoSpec.Desktop</RootNamespace>
     <ApplicationIcon></ApplicationIcon>
+    <!-- Версия приложения = версия релиза (Velopack/GitHub). Поднимать при каждом выпуске. -->
+    <Version>1.0.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,6 +21,8 @@
     <!-- Разовый перенос старых данных из портативного PostgreSQL в SQLite при первом запуске. -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
     <PackageReference Include="Npgsql" Version="9.0.3" />
+    <!-- Авто-обновление с GitHub Releases; версия пакета совпадает с версией vpk CLI. -->
+    <PackageReference Include="Velopack" Version="1.2.161" />
   </ItemGroup>
 
 </Project>

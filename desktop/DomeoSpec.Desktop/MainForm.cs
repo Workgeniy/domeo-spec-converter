@@ -48,6 +48,7 @@ public sealed class MainForm : Form
             Controls.Remove(_status);
             Controls.Add(_web);
             _web.Source = new Uri(_backend.AppUrl);
+            _ = Updater.CheckInBackgroundAsync();  // фоновая проверка обновлений — работе не мешает
         }
         catch (Exception ex)
         {
