@@ -12,8 +12,9 @@
     <AssemblyName>Domeo</AssemblyName>
     <RootNamespace>DomeoSpec.Desktop</RootNamespace>
     <ApplicationIcon></ApplicationIcon>
-    <!-- Версия приложения = версия релиза (Velopack/GitHub). Поднимать при каждом выпуске. -->
-    <Version>1.0.0</Version>
+    <!-- Версия приложения = версия релиза (Velopack/GitHub). Поднимать при каждом выпуске
+         (или задавать параметром release.ps1 -Version, он переопределяет это значение). -->
+    <Version>1.0.1</Version>
   </PropertyGroup>
 
   <ItemGroup>
