@@ -25,9 +25,11 @@ public sealed class MainForm : Form
     private readonly Button _updateLater = new() { Text = "Позже", Dock = DockStyle.Right, Width = 90, FlatStyle = FlatStyle.System };
 
     // Строка состояния — снизу: версия + статус + кнопка ручной проверки.
-    private readonly Panel _statusBar = new() { Dock = DockStyle.Bottom, Height = 28, BackColor = SystemColors.Control };
+    private readonly Panel _statusBar = new() { Dock = DockStyle.Bottom, Height = 34, BackColor = SystemColors.Control };
     private readonly Label _verLabel = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Font = new Font("Segoe UI", 8.5F), ForeColor = SystemColors.GrayText, Padding = new Padding(12, 0, 0, 0) };
-    private readonly Button _checkButton = new() { Text = "Проверить обновления", Dock = DockStyle.Right, Width = 180, FlatStyle = FlatStyle.System };
+    // Ширина с запасом, чтобы «Проверить обновления» помещалось в одну строку (при 180 текст
+     // переносился и обрезался). Dock.Right заполняет высоту строки; ширина масштабируется с DPI.
+    private readonly Button _checkButton = new() { Text = "Проверить обновления", Dock = DockStyle.Right, Width = 230, FlatStyle = FlatStyle.System };
 
     public MainForm()
     {

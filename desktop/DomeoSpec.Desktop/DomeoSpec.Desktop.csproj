@@ -14,7 +14,7 @@
     <ApplicationIcon></ApplicationIcon>
     <!-- Версия приложения = версия релиза (Velopack/GitHub). Поднимать при каждом выпуске
          (или задавать параметром release.ps1 -Version, он переопределяет это значение). -->
-    <Version>1.0.1</Version>
+    <Version>1.0.2</Version>
   </PropertyGroup>
 
   <ItemGroup>
