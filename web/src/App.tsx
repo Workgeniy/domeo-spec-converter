@@ -9,6 +9,7 @@ import { SuppliersPanel } from './components/SuppliersPanel'
 import { UploadPane } from './components/UploadPane'
 import { WorkspaceView } from './components/WorkspaceView'
 import { useWorkspace } from './store'
+import { useExtensionBridge } from './extensionBridge'
 import { useUi } from './ui'
 import { useCloud } from './projects'
 import { CloudStatus } from './components/CloudStatus'
@@ -27,6 +28,7 @@ export default function App() {
   const suppliersOpen = useUi((s) => s.suppliersOpen)
   const openSuppliers = useUi((s) => s.openSuppliers)
   const closeSuppliers = useUi((s) => s.closeSuppliers)
+  useExtensionBridge() // десктоп: связь с браузерным расширением (цены с маркетплейсов)
 
   return (
     <AppShell header={{ height: 56 }} padding="md">

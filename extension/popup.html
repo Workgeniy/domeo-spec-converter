@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font: 13px/1.45 system-ui, Segoe UI, Arial; margin: 14px; width: 260px; color: #1a1a1a; }
+    h3 { margin: 0 0 10px; }
+    label { display: block; margin-bottom: 8px; }
+    input { width: 80px; padding: 3px; }
+    #status { margin: 8px 0; }
+    .ok { color: #2ea043; } .no { color: #c0392b; }
+    button { font: 13px system-ui; padding: 5px 10px; border: 1px solid #5b2be0; background: #5b2be0; color: #fff; border-radius: 6px; cursor: pointer; }
+    p { color: #666; }
+  </style>
+</head>
+<body>
+  <h3>Domeo — цены</h3>
+  <label>Порт приложения: <input id="port" type="number" value="8777"></label>
+  <div id="status">—</div>
+  <button id="save">Сохранить и проверить</button>
+  <p>Открывайте товары на Wildberries / Ozon как обычно — цены подхватятся на странице, панель справа снизу.</p>
+  <script src="popup.js"></script>
+</body>
+</html>

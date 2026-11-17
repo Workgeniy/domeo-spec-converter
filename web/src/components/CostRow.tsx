@@ -178,7 +178,19 @@ function PriceChoice({ label, value, active, onClick }: { label: string; value: 
   )
 }
 
-/** Графа «Интернет на дату»: цена (щелчок — в базовую), под ней дата и продавец, при наведении — все предложения. */
+/** Цвет бейджа по магазину — чтобы WB/Ozon различались с одного взгляда. */
+function shopColor(shop: string): string {
+  const s = shop.toLowerCase()
+  if (s.includes('wildberries')) return 'grape'
+  if (s.includes('ozon')) return 'indigo'
+  if (s.includes('dns')) return 'orange'
+  if (s.includes('ситилинк')) return 'red'
+  if (s.includes('мегамаркет')) return 'green'
+  if (s.includes('яндекс')) return 'yellow'
+  return 'gray'
+}
+
+/** Графа «Интернет на дату»: цена (щелчок — в базовую), под ней бейджи магазинов и дата, при наведении — все предложения. */
 function InternetCell({ row, active, onChoose, onOffer }: { row: Row; active: boolean; onChoose: () => void; onOffer: (offer: InternetOffer) => void }) {
   const lookup = row.internet ?? null
   const price = row.internet_price ?? null
@@ -202,14 +214,30 @@ function InternetCell({ row, active, onChoose, onOffer }: { row: Row; active: bo
     )
   }
   const chosen = lookup?.offers.find((o) => o.url === row.internet_source)
+  const shops = lookup ? [...new Set(lookup.offers.map((o) => o.shop).filter(Boolean))] : []
+  const shownShops = shops.slice(0, 3)
+  const moreShops = shops.length - shownShops.length
   return (
     <HoverCard width={600} shadow="md" withArrow openDelay={200} disabled={!lookup || lookup.offers.length === 0}>
       <HoverCard.Target>
         <div>
           <PriceChoice label="цену из интернета" value={price} active={active} onClick={onChoose} />
+          {shownShops.length > 0 && (
+            <Group gap={4} justify="flex-end" mt={2} wrap="nowrap">
+              {shownShops.map((s) => (
+                <Badge key={s} size="xs" radius="sm" variant={chosen?.shop === s ? 'filled' : 'light'} color={shopColor(s)}>
+                  {s}
+                </Badge>
+              ))}
+              {moreShops > 0 && (
+                <Badge size="xs" radius="sm" variant="light" color="gray">
+                  +{moreShops}
+                </Badge>
+              )}
+            </Group>
+          )}
           <Text size="xs" c="dimmed" ta="right" lineClamp={1}>
             {row.internet_date}
-            {chosen?.shop ? ` · ${chosen.shop}` : ''}
             {chosen?.analog ? ' · аналог' : ''}
           </Text>
         </div>

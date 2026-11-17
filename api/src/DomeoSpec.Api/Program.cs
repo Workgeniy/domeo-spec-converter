@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Sockets;
 using System.Text.Json;
 using DomeoSpec.Api.Infrastructure;
 using DomeoSpec.Application;
@@ -9,6 +11,26 @@ var builder = WebApplication.CreateBuilder(args);
 // Локальные реквизиты БД не попадают в Git или Docker-образ; переменные среды приоритетнее.
 if (builder.Environment.IsDevelopment())
     builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true).AddEnvironmentVariables();
+
+// Доп. loopback-порт для браузерного расширения Domeo (мост «цена с маркетплейса → строка спеки»,
+// ExtensionBridgeController). Слушаем ТОЛЬКО 127.0.0.1 и ТОЛЬКО если порт свободен — занятость порта
+// не должна ронять запуск API/десктопа. Случайный адрес UI (ASPNETCORE_URLS из десктопа) сохраняем.
+// В тестах (WebApplicationFactory) не трогаем — там свой сервер.
+if (!builder.Environment.IsEnvironment("Testing"))
+{
+    var bridgePort = builder.Configuration.GetValue("Extension:BridgePort", 8777);
+    if (bridgePort > 0 && BridgePortFree(bridgePort))
+    {
+        var bridgeUrl = $"http://127.0.0.1:{bridgePort}";
+        var uiUrls = builder.Configuration["urls"]
+                     ?? builder.Configuration["ASPNETCORE_URLS"]
+                     ?? Environment.GetEnvironmentVariable("ASPNETCORE_URLS");
+        builder.WebHost.UseUrls(string.IsNullOrWhiteSpace(uiUrls)
+            ? [bridgeUrl]
+            : [.. uiUrls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Where(u => !u.Contains($":{bridgePort}")), bridgeUrl]);
+    }
+}
 
 // --- Services -----------------------------------------------------------------
 
@@ -25,6 +47,9 @@ builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 100L * 1024 
 
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddApplication();
+
+// Состояние моста браузерного расширения (почтовый ящик UI ↔ расширение), см. ExtensionBridgeController.
+builder.Services.AddSingleton<DomeoSpec.Api.Extension.ExtensionBridgeState>();
 
 // RFC 7807 для любой ошибки; поле code — у каждого ProblemDetails, включая те, что формирует фреймворк.
 builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = context =>
@@ -67,6 +92,19 @@ if (Directory.Exists(webDist))
 }
 
 app.Run();
+
+// Порт свободен? Проверяем до привязки моста, чтобы занятость 8777 не уронила запуск приложения.
+static bool BridgePortFree(int port)
+{
+    try
+    {
+        var listener = new TcpListener(IPAddress.Loopback, port);
+        listener.Start();
+        listener.Stop();
+        return true;
+    }
+    catch (SocketException) { return false; }
+}
 
 /// <summary>Точка входа видна тестам (WebApplicationFactory&lt;Program&gt;).</summary>
 public partial class Program;
