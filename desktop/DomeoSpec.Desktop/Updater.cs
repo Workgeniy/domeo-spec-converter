@@ -18,7 +18,7 @@ internal sealed class Updater
 
     /// <summary>Проверить обновления и, если есть, скачать. onStatus — короткий статус для строки
     /// состояния; onReady(версия) — когда обновление скачано и готово к установке.</summary>
-    public async Task CheckAsync(Action<string> onStatus, Action<string> onReady)
+    public async Task CheckAsync(Action<string> onStatus, Action<string> onReady, Action<int>? onProgress = null)
     {
         if (!_mgr.IsInstalled)
         {
@@ -36,7 +36,7 @@ internal sealed class Updater
             }
             var ver = info.TargetFullRelease.Version.ToString();
             onStatus($"скачивание обновления {ver}…");
-            await _mgr.DownloadUpdatesAsync(info);
+            await _mgr.DownloadUpdatesAsync(info, onProgress);
             _ready = info;
             onStatus($"обновление {ver} готово к установке");
             onReady(ver);

@@ -30,6 +30,8 @@ public sealed class MainForm : Form
     // Ширина с запасом, чтобы «Проверить обновления» помещалось в одну строку (при 180 текст
      // переносился и обрезался). Dock.Right заполняет высоту строки; ширина масштабируется с DPI.
     private readonly Button _checkButton = new() { Text = "Проверить обновления", Dock = DockStyle.Right, Width = 230, FlatStyle = FlatStyle.System };
+    // Прогресс скачивания обновления — в строке состояния слева от кнопки; виден только во время скачивания.
+    private readonly ProgressBar _dlProgress = new() { Dock = DockStyle.Right, Width = 170, Visible = false, Minimum = 0, Maximum = 100, Style = ProgressBarStyle.Continuous };
 
     public MainForm()
     {
@@ -48,6 +50,7 @@ public sealed class MainForm : Form
         // Строка состояния: [версия/статус .... «Проверить обновления»].
         _checkButton.Click += async (_, _) => { _checkButton.Enabled = false; await CheckUpdatesAsync(); _checkButton.Enabled = true; };
         _statusBar.Controls.Add(_checkButton);
+        _statusBar.Controls.Add(_dlProgress);
         _statusBar.Controls.Add(_verLabel);
 
         _status.Text = "Запуск…";
@@ -99,13 +102,23 @@ public sealed class MainForm : Form
         _updater.ApplyAndRestart();      // установит обновление и перезапустит Domeo в новой версии
     }
 
-    private Task CheckUpdatesAsync() => _updater.CheckAsync(
-        onStatus: s => BeginInvoke(() => SetStatus(s)),
-        onReady: ver => BeginInvoke(() =>
-        {
-            _updateText.Text = $"Доступно обновление Domeo {ver}.";
-            _updateBar.Visible = true;
-        }));
+    private Task CheckUpdatesAsync()
+    {
+        BeginInvoke(() => { _dlProgress.Value = 0; _dlProgress.Visible = false; });
+        return _updater.CheckAsync(
+            onStatus: s => BeginInvoke(() => SetStatus(s)),
+            onReady: ver => BeginInvoke(() =>
+            {
+                _dlProgress.Visible = false;
+                _updateText.Text = $"Доступно обновление Domeo {ver}.";
+                _updateBar.Visible = true;
+            }),
+            onProgress: pct => BeginInvoke(() =>
+            {
+                _dlProgress.Visible = true;
+                _dlProgress.Value = Math.Clamp(pct, 0, 100);
+            }));
+    }
 
     private void SetStatus(string s) =>
         _verLabel.Text = string.IsNullOrEmpty(s) ? $"Domeo {_updater.CurrentVersion}" : $"Domeo {_updater.CurrentVersion}  —  {s}";
