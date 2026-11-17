@@ -24,22 +24,16 @@
   function autoIsOn() { return !!(auto && auto.on); }
 
   const MARKETS = {
-    wildberries:    { name: "Wildberries",    ready: true,  url: (q) => "https://www.wildberries.ru/catalog/0/search.aspx?search=" + encodeURIComponent(q) },
-    dns:            { name: "DNS",             ready: true,  url: (q) => "https://www.dns-shop.ru/search/?q=" + encodeURIComponent(q) },
-    citilink:       { name: "Ситилинк",        ready: true,  url: (q) => "https://www.citilink.ru/search/?text=" + encodeURIComponent(q) },
-    ozon:           { name: "Ozon",            ready: true,  url: (q) => "https://www.ozon.ru/search/?text=" + encodeURIComponent(q) },
-    yandexmarket:   { name: "Я.Маркет",        ready: false, url: (q) => "https://market.yandex.ru/search?text=" + encodeURIComponent(q) },
-    megamarket:     { name: "Мегамаркет",      ready: false, url: (q) => "https://megamarket.ru/catalog/?q=" + encodeURIComponent(q) },
-    vseinstrumenti: { name: "ВсеИнструменти",  ready: false, url: (q) => "https://www.vseinstrumenti.ru/search/?what=" + encodeURIComponent(q) },
-    lemana:         { name: "Лемана ПРО",      ready: false, url: (q) => "https://lemanapro.ru/search/?q=" + encodeURIComponent(q) },
-    petrovich:      { name: "Петрович",        ready: false, url: (q) => "https://petrovich.ru/search/?q=" + encodeURIComponent(q) }
+    wildberries:  { name: "Wildberries", ready: true, url: (q) => "https://www.wildberries.ru/catalog/0/search.aspx?search=" + encodeURIComponent(q) },
+    ozon:         { name: "Ozon",        ready: true, url: (q) => "https://www.ozon.ru/search/?text=" + encodeURIComponent(q) },
+    yandexmarket: { name: "Я.Маркет",    ready: true, url: (q) => "https://market.yandex.ru/search?text=" + encodeURIComponent(q) }
   };
 
   function marketFromHost() {
     const h = location.host;
     if (/wildberries\.ru/.test(h)) return "wildberries";
-    if (/lemanapro\.ru|leroymerlin\.ru/.test(h)) return "lemana";
-    for (const k of Object.keys(MARKETS)) if (h.includes(k)) return k;
+    if (/ozon\.ru/.test(h)) return "ozon";
+    if (/market\.yandex\.ru/.test(h)) return "yandexmarket";
     return null;
   }
 
@@ -94,7 +88,34 @@
     }
     return items;
   }
-  const DOM_SCRAPERS = { wildberries: scrapeWb, ozon: scrapeOzon };
+  // Яндекс.Маркет: карточка через ссылку /card/<slug>/<id> (id — хвостовое число). Разметка вся в
+  // SSR-скриптах, поэтому берём ВИДИМЫЙ текст (innerText): название — самая длинная не-атрибутная
+  // строка, цена — число перед ₽ (промо «15 %» отсекаем, т.к. за ним «%», а не «₽»).
+  function scrapeYandexMarket() {
+    const items = [], ids = new Set();
+    for (const a of document.querySelectorAll('a[href*="/card/"]')) {
+      const href = (a.getAttribute("href") || "").split("?")[0];
+      const m = href.match(/\/(\d+)\/?$/);
+      const id = m ? m[1] : "";
+      if (!id || ids.has(id)) continue;
+      let c = a;
+      for (let i = 0; i < 8 && c.parentElement; i++) { c = c.parentElement; if (/₽/.test(c.textContent || "")) break; }
+      const text = c.innerText || "";
+      const lines = text.split("\n").map((s) => s.trim()).filter(Boolean);
+      if (!lines.length) continue;
+      let price = null;
+      for (let i = 0; i < lines.length; i++) {
+        if (/^\d[\d\s ]*$/.test(lines[i]) && /^₽/.test(lines[i + 1] || "")) { price = parseInt(lines[i].replace(/\D/g, ""), 10); break; }
+      }
+      if (!price) { const mm = text.match(/(\d[\d\s ]{2,})\s*₽/); if (mm) { const n = parseInt(mm[1].replace(/\D/g, ""), 10); if (n > 50) price = n; } }
+      const name = lines.filter((x) => x.length > 20 && !/₽/.test(x) && !/^\d/.test(x) && !/^[^:]{1,22}:\s/.test(x) && /[а-яёa-z]/i.test(x)).sort((x, y) => y.length - x.length)[0] || "";
+      if (!price || !name) continue;
+      ids.add(id);
+      items.push({ source: "yandexmarket", articleId: String(id), name: name, brand: "", seller: "", price: price, oldPrice: null, rating: null, reviews: null, url: "https://market.yandex.ru" + href });
+    }
+    return items;
+  }
+  const DOM_SCRAPERS = { wildberries: scrapeWb, ozon: scrapeOzon, yandexmarket: scrapeYandexMarket };
 
   function scrapeNow() {
     const fn = DOM_SCRAPERS[marketFromHost()];

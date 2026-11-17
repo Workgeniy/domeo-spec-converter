@@ -11,7 +11,7 @@
   const TAG = "domeo-mp";
   // DEBUG-режим: для сайтов без готового парсера пишем образец ответа в консоль страницы
   // ([domeo-capture]), чтобы по нему дописать парсер. Выключить в релизе: false.
-  const DEBUG_CAPTURE = true;
+  const DEBUG_CAPTURE = false;
   function dbg() { if (!DEBUG_CAPTURE) return; try { console.log.apply(console, ["[domeo]"].concat([].slice.call(arguments))); } catch (e) {} }
 
   function num(s) {

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Domeo — цены для спецификации",
-  "version": "0.1.0",
-  "description": "Читает цены на популярных маркетплейсах на страницах, которые вы открываете, и переносит их в Domeo. Своих запросов к маркетплейсу не делает.",
+  "version": "0.2.0",
+  "description": "Читает цены на Wildberries, Ozon и Яндекс.Маркете на страницах, которые вы открываете, и переносит их в Domeo. Своих запросов к маркетплейсу не делает.",
   "permissions": ["storage"],
   "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
   "background": { "service_worker": "background.js" },
@@ -12,14 +12,7 @@
       "matches": [
         "*://*.wildberries.ru/*",
         "*://*.ozon.ru/*",
-        "*://*.market.yandex.ru/*",
-        "*://*.megamarket.ru/*",
-        "*://*.vseinstrumenti.ru/*",
-        "*://*.lemanapro.ru/*",
-        "*://*.leroymerlin.ru/*",
-        "*://*.dns-shop.ru/*",
-        "*://*.citilink.ru/*",
-        "*://*.petrovich.ru/*"
+        "*://*.market.yandex.ru/*"
       ],
       "js": ["content.js"],
       "run_at": "document_start"
@@ -28,14 +21,7 @@
       "matches": [
         "*://*.wildberries.ru/*",
         "*://*.ozon.ru/*",
-        "*://*.market.yandex.ru/*",
-        "*://*.megamarket.ru/*",
-        "*://*.vseinstrumenti.ru/*",
-        "*://*.lemanapro.ru/*",
-        "*://*.leroymerlin.ru/*",
-        "*://*.dns-shop.ru/*",
-        "*://*.citilink.ru/*",
-        "*://*.petrovich.ru/*"
+        "*://*.market.yandex.ru/*"
       ],
       "js": ["inject.js"],
       "run_at": "document_start",
@@ -48,14 +34,7 @@
       "matches": [
         "*://*.wildberries.ru/*",
         "*://*.ozon.ru/*",
-        "*://*.market.yandex.ru/*",
-        "*://*.megamarket.ru/*",
-        "*://*.vseinstrumenti.ru/*",
-        "*://*.lemanapro.ru/*",
-        "*://*.leroymerlin.ru/*",
-        "*://*.dns-shop.ru/*",
-        "*://*.citilink.ru/*",
-        "*://*.petrovich.ru/*"
+        "*://*.market.yandex.ru/*"
       ]
     }
   ]
