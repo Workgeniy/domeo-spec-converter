@@ -25,6 +25,8 @@ export interface BridgeFoundPrice {
   brand?: string | null
   rating?: number | null
   reviews?: number | null
+  vat_rate?: number | null
+  vat_refund?: boolean
 }
 
 export interface BridgeSpecLine {
@@ -110,6 +112,8 @@ export function pricesToLookups(prices: BridgeFoundPrice[]): Record<string, Inte
       price: p.price,
       analog: false,
       note: p.old_price ? `было ${p.old_price} ₽` : '',
+      vat_rate: p.vat_rate ?? null,
+      vat_refund: !!p.vat_refund,
     }))
     const price = medianPrice(offers) // рекомендуемая = медиана (устойчива к аксессуарам/выбросам)
     out[id] = {

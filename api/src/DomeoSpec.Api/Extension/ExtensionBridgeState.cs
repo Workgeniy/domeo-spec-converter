@@ -50,4 +50,6 @@ public sealed record BridgeFoundPrice(
     string? Seller = null,
     string? Brand = null,
     double? Rating = null,
-    int? Reviews = null);
+    int? Reviews = null,
+    int? VatRate = null,       // ставка НДС из бизнес-карточки («Включая НДС 22 %» → 22); null — не указано
+    bool VatRefund = false);   // бейдж «ВОЗВРАТ НДС» — юрлицо вернёт НДС

@@ -271,6 +271,13 @@ function InternetCell({ row, active, onChoose, onOffer }: { row: Row; active: bo
                 </Text>
                 <Text size="xs" c="dimmed" lineClamp={2}>
                   {o.shop}
+                  {o.vat_rate != null ? (
+                    <Text span c={o.vat_refund ? 'teal' : 'dimmed'} fw={o.vat_refund ? 600 : 400}>
+                      {` · НДС ${o.vat_rate}%${o.vat_refund ? ' возврат' : ''}`}
+                    </Text>
+                  ) : (
+                    <Text span c="dimmed">{' · розница'}</Text>
+                  )}
                   {o.url && (
                     <>
                       {' · '}

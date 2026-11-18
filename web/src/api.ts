@@ -78,6 +78,10 @@ export interface InternetOffer {
   /** Не та же позиция, а похожая. */
   analog: boolean
   note: string
+  /** Ставка НДС из бизнес-оферты (напр. 22); null — не указано (розница). */
+  vat_rate?: number | null
+  /** «Возврат НДС» — продавец даёт счёт-фактуру, юрлицо вернёт НДС. */
+  vat_refund?: boolean
 }
 
 export type InternetStatus = 'found' | 'not_found' | 'error'

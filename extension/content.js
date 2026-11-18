@@ -26,7 +26,7 @@
   const MARKETS = {
     wildberries:  { name: "Wildberries", ready: true, url: (q) => "https://www.wildberries.ru/catalog/0/search.aspx?search=" + encodeURIComponent(q) },
     ozon:         { name: "Ozon",        ready: true, url: (q) => "https://www.ozon.ru/search/?text=" + encodeURIComponent(q) },
-    yandexmarket: { name: "Я.Маркет",    ready: true, url: (q) => "https://market.yandex.ru/search?text=" + encodeURIComponent(q) }
+    yandexmarket: { name: "Я.Маркет (бизнес)", ready: true, url: (q) => "https://business.market.yandex.ru/search?text=" + encodeURIComponent(q) }
   };
 
   function marketFromHost() {
@@ -110,8 +110,11 @@
       if (!price) { const mm = text.match(/(\d[\d\s ]{2,})\s*₽/); if (mm) { const n = parseInt(mm[1].replace(/\D/g, ""), 10); if (n > 50) price = n; } }
       const name = lines.filter((x) => x.length > 20 && !/₽/.test(x) && !/^\d/.test(x) && !/^[^:]{1,22}:\s/.test(x) && /[а-яёa-z]/i.test(x)).sort((x, y) => y.length - x.length)[0] || "";
       if (!price || !name) continue;
+      const vatM = text.match(/Включая НДС\s*(\d+)\s*%/i);           // бизнес-карточка: «Включая НДС 22 %»
+      const vatRate = vatM ? parseInt(vatM[1], 10) : null;
+      const vatRefund = /ВОЗВРАТ НДС|возврат НДС/i.test(text);       // бейдж «ВОЗВРАТ НДС» → юрлицо вернёт НДС
       ids.add(id);
-      items.push({ source: "yandexmarket", articleId: String(id), name: name, brand: "", seller: "", price: price, oldPrice: null, rating: null, reviews: null, url: "https://market.yandex.ru" + href });
+      items.push({ source: "yandexmarket", articleId: String(id), name: name, brand: "", seller: "", price: price, oldPrice: null, rating: null, reviews: null, url: "https://business.market.yandex.ru" + href, vatRate: vatRate, vatRefund: vatRefund });
     }
     return items;
   }
@@ -199,7 +202,8 @@
     await app("sendPrice", {
       spec_item_id: activeId, source: p.source, article_id: p.articleId,
       name: p.name, url: p.url, price: p.price, old_price: p.oldPrice,
-      seller: p.seller, brand: p.brand, rating: p.rating, reviews: p.reviews
+      seller: p.seller, brand: p.brand, rating: p.rating, reviews: p.reviews,
+      vat_rate: p.vatRate ?? null, vat_refund: !!p.vatRefund
     });
     priced.add(activeId);
     render();
@@ -278,7 +282,7 @@
 
   async function pushCandidates(id, list) {
     for (const p of list) {
-      await app("sendPrice", { spec_item_id: id, source: p.source, article_id: p.articleId, name: p.name, url: p.url, price: p.price, old_price: p.oldPrice, seller: p.seller, brand: p.brand, rating: p.rating, reviews: p.reviews });
+      await app("sendPrice", { spec_item_id: id, source: p.source, article_id: p.articleId, name: p.name, url: p.url, price: p.price, old_price: p.oldPrice, seller: p.seller, brand: p.brand, rating: p.rating, reviews: p.reviews, vat_rate: p.vatRate ?? null, vat_refund: !!p.vatRefund });
     }
   }
 
