@@ -11,6 +11,9 @@ public interface IPricingEngine
     /// <summary>Загрузить выгрузку 1С «Заказы поставщикам» и пересобрать прайс.</summary>
     Task<PriceListInfo> UploadPriceListAsync(Stream xlsx, string fileName, CancellationToken ct);
 
+    /// <summary>Разобрать выгрузку 1С и вернуть предпросмотр (сводка + примеры) БЕЗ замены прайса.</summary>
+    Task<PriceListPreview> PreviewPriceListAsync(Stream xlsx, string fileName, CancellationToken ct);
+
     /// <summary>Сводка по текущему прайсу; null — прайс ещё не загружен.</summary>
     Task<PriceListInfo?> GetPriceListAsync(CancellationToken ct);
 

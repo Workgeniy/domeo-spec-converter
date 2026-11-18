@@ -238,6 +238,30 @@ export interface PriceListInfo {
   period_to: string | null
 }
 
+/** Предпросмотр выгрузки 1С: та же сводка + примеры позиций, без замены прайса. */
+export interface PriceListPreview {
+  source: string
+  rows_total: number
+  entries: number
+  with_two_or_more: number
+  purchases: number
+  outliers: number
+  period_from: string | null
+  period_to: string | null
+  samples: PriceListSample[]
+}
+
+export interface PriceListSample {
+  name: string
+  group: string
+  count: number
+  price_min: number | null
+  price_max: number | null
+  price_median: number | null
+  price_last: number | null
+  last_date: string | null
+}
+
 export interface MatchRequestItem {
   id: string
   name: string
@@ -439,6 +463,12 @@ export function uploadPriceList(file: File): Promise<PriceListInfo> {
   const form = new FormData()
   form.append('file', file)
   return fetch('/api/specifications/pricelist', { method: 'POST', body: form }).then((r) => readData<PriceListInfo>(r))
+}
+
+export function previewPriceList(file: File): Promise<PriceListPreview> {
+  const form = new FormData()
+  form.append('file', file)
+  return fetch('/api/specifications/pricelist/preview', { method: 'POST', body: form }).then((r) => readData<PriceListPreview>(r))
 }
 
 export function matchHistory(items: MatchRequestItem[]): Promise<Record<string, HistoryPrice>> {

@@ -29,6 +29,17 @@ public sealed class PriceListController(IPricingEngine engine) : ControllerBase
         return ApiResponse<PriceListInfo>.Ok(await handler.HandleAsync(stream, file.FileName, file.Length, ct));
     }
 
+    /// <summary>Предпросмотр выгрузки 1С: что распозналось (сводка + примеры), без замены прайса.</summary>
+    [HttpPost("preview")]
+    [RequestSizeLimit(100L * 1024 * 1024)]
+    public async Task<ActionResult<ApiResponse<PriceListPreview>>> Preview(IFormFile? file, [FromServices] PreviewPriceListHandler handler, CancellationToken ct)
+    {
+        if (file is null)
+            throw new ValidationFailedException("Не передан файл (поле form-data «file»).");
+        await using var stream = file.OpenReadStream();
+        return ApiResponse<PriceListPreview>.Ok(await handler.HandleAsync(stream, file.FileName, file.Length, ct));
+    }
+
     /// <summary>Сопоставить позиции с историей закупок.</summary>
     [HttpPost("match")]
     public async Task<ActionResult<ApiResponse<MatchResult>>> Match([FromBody] MatchRequest request, [FromServices] MatchPriceListHandler handler, CancellationToken ct)

@@ -1,4 +1,4 @@
-import { Alert, Anchor, Badge, Button, FileButton, Group, Menu, Pagination, Paper, Progress, SegmentedControl, Stack, Table, Text, TextInput } from '@mantine/core'
+import { Alert, Anchor, Badge, Button, FileButton, Group, Menu, Modal, Pagination, Paper, Progress, SegmentedControl, Stack, Table, Text, TextInput } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import { IconChevronDown, IconDatabaseImport, IconFileDownload, IconRefresh, IconWorldSearch } from '@tabler/icons-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -8,12 +8,14 @@ import {
   getPriceList,
   lookupInternet,
   matchHistory,
+  previewPriceList,
   uploadPriceList,
   type HistoryPrice,
   type InternetSearchInfo,
   type MatchKind,
   type MatchRequestItem,
   type PriceListInfo,
+  type PriceListPreview,
   type SearchParam,
 } from '../api'
 import { rowKey as keyOf, useWorkspace, type HistoryChoice, type RowKey, type SummaryRow } from '../store'
@@ -68,6 +70,8 @@ export function CostPanel({ onDownload, downloading }: Props) {
   const [priceList, setPriceList] = useState<PriceListInfo | null | undefined>(undefined)
   const [internet, setInternet] = useState<InternetSearchInfo | null | undefined>(undefined)
   const [uploading, setUploading] = useState(false)
+  const [previewing, setPreviewing] = useState(false)
+  const [preview, setPreview] = useState<{ info: PriceListPreview; file: File } | null>(null)
   const [matching, setMatching] = useState(false)
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
   const cancelRef = useRef(false)
@@ -142,11 +146,26 @@ export function CostPanel({ onDownload, downloading }: Props) {
   const currentPage = Math.min(page, pages)
   const pageRows = visible.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
 
+  // Выбрали файл → сначала разбираем БЕЗ сохранения и показываем предпросмотр (чтобы не ошиблись).
+  async function startPreview(file: File | null) {
+    if (!file) return
+    setPreviewing(true)
+    try {
+      setPreview({ info: await previewPriceList(file), file })
+    } catch (e) {
+      notifications.show({ color: 'red', title: 'Не удалось прочитать выгрузку', message: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setPreviewing(false)
+    }
+  }
+
+  // Подтвердили предпросмотр → пересобираем базу этим файлом.
   async function upload(file: File | null) {
     if (!file) return
     setUploading(true)
     try {
       setPriceList(await uploadPriceList(file))
+      setPreview(null)
       notifications.show({ color: 'green', title: 'Прайс закупки собран', message: file.name })
     } catch (e) {
       notifications.show({ color: 'red', title: 'Не удалось загрузить выгрузку', message: e instanceof Error ? e.message : String(e) })
@@ -341,9 +360,9 @@ export function CostPanel({ onDownload, downloading }: Props) {
             )}
           </div>
           <Group>
-            <FileButton onChange={upload} accept=".xlsx,.xlsm">
+            <FileButton onChange={startPreview} accept=".xlsx,.xlsm">
               {(props) => (
-                <Button {...props} variant="default" leftSection={<IconDatabaseImport size={16} />} loading={uploading}>
+                <Button {...props} variant="default" leftSection={<IconDatabaseImport size={16} />} loading={previewing}>
                   {priceList ? 'Заменить выгрузку 1С' : 'Загрузить выгрузку 1С'}
                 </Button>
               )}
@@ -382,6 +401,59 @@ export function CostPanel({ onDownload, downloading }: Props) {
           </Group>
         </Group>
       </Paper>
+
+      <Modal opened={preview !== null} onClose={() => setPreview(null)} title="Предпросмотр выгрузки 1С — проверьте перед загрузкой" size="xl" transitionProps={{ duration: 0 }}>
+        {preview && (
+          <Stack gap="sm">
+            <Text size="sm">
+              <b>{preview.info.source}</b> · строк {preview.info.rows_total} · позиций {preview.info.entries} · покупок {preview.info.purchases}
+              {preview.info.outliers > 0 ? ` · выбросов ${preview.info.outliers}` : ''} · период {preview.info.period_from ?? '?'} — {preview.info.period_to ?? '?'}
+            </Text>
+            {preview.info.entries === 0 && (
+              <Alert color="red" title="Позиции не распознаны">
+                В файле не нашлось распознаваемых строк. Проверьте, что это выгрузка «Заказы поставщикам» из 1С с нужными колонками.
+              </Alert>
+            )}
+            {preview.info.samples.length > 0 && (
+              <>
+                <Text size="xs" c="dimmed">Примеры распознанных позиций (первые {preview.info.samples.length}):</Text>
+                <Table striped withTableBorder fz="xs">
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Позиция</Table.Th>
+                      <Table.Th>Группа</Table.Th>
+                      <Table.Th ta="right">Покупок</Table.Th>
+                      <Table.Th ta="right">Мин</Table.Th>
+                      <Table.Th ta="right">Медиана</Table.Th>
+                      <Table.Th ta="right">Макс</Table.Th>
+                      <Table.Th ta="right">Последняя</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {preview.info.samples.map((s, i) => (
+                      <Table.Tr key={i}>
+                        <Table.Td>{s.name}</Table.Td>
+                        <Table.Td>{s.group}</Table.Td>
+                        <Table.Td ta="right">{s.count}</Table.Td>
+                        <Table.Td ta="right">{s.price_min != null ? formatMoney(s.price_min) : '—'}</Table.Td>
+                        <Table.Td ta="right">{s.price_median != null ? formatMoney(s.price_median) : '—'}</Table.Td>
+                        <Table.Td ta="right">{s.price_max != null ? formatMoney(s.price_max) : '—'}</Table.Td>
+                        <Table.Td ta="right">{s.price_last != null ? formatMoney(s.price_last) : '—'}</Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </>
+            )}
+            <Group justify="flex-end" mt="sm">
+              <Button variant="default" onClick={() => setPreview(null)}>Отмена</Button>
+              <Button color="green" loading={uploading} disabled={preview.info.entries === 0} onClick={() => upload(preview.file)}>
+                Загрузить ({preview.info.entries} поз.)
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </Modal>
 
       <Paper withBorder p="md">
         <Group justify="space-between" align="center" wrap="wrap" gap="lg">

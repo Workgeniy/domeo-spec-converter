@@ -21,6 +21,22 @@ public sealed class UploadPriceListHandler(IPricingEngine engine)
     }
 }
 
+/// <summary>Сценарий «предпросмотр выгрузки 1С»: та же проверка файла, но ядро разбирает БЕЗ сохранения.</summary>
+public sealed class PreviewPriceListHandler(IPricingEngine engine)
+{
+    public async Task<PriceListPreview> HandleAsync(Stream xlsx, string fileName, long length, CancellationToken ct)
+    {
+        var ok = fileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase) || fileName.EndsWith(".xlsm", StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(fileName) || !ok)
+            throw new ValidationFailedException("Ожидается выгрузка 1С в формате xlsx.");
+        if (length <= 0)
+            throw new ValidationFailedException("Файл пустой.");
+        if (length > UploadPriceListHandler.MaxFileBytes)
+            throw new ValidationFailedException("Файл больше 100 МБ.");
+        return await engine.PreviewPriceListAsync(xlsx, fileName, ct);
+    }
+}
+
 /// <summary>Сценарий «сопоставить позиции с историей закупок».</summary>
 public sealed class MatchPriceListHandler(IPricingEngine engine)
 {

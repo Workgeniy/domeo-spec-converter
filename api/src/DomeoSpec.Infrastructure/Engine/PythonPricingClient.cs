@@ -25,6 +25,18 @@ public sealed class PythonPricingClient(HttpClient http) : IPricingEngine
                ?? throw new ServiceUnavailableException("Ядро вернуло пустой ответ на загрузку прайса.");
     }
 
+    public async Task<PriceListPreview> PreviewPriceListAsync(Stream xlsx, string fileName, CancellationToken ct)
+    {
+        using var form = new MultipartFormDataContent();
+        var file = new StreamContent(xlsx);
+        file.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        form.Add(file, "file", "history.xlsx");
+        form.Add(new StringContent(fileName), "file_name");
+        using var response = await SendAsync(() => http.PostAsync("/api/pricelist/preview", form, ct), ct);
+        return await response.Content.ReadFromJsonAsync<PriceListPreview>(Json, ct)
+               ?? throw new ServiceUnavailableException("Ядро вернуло пустой ответ на предпросмотр прайса.");
+    }
+
     public async Task<PriceListInfo?> GetPriceListAsync(CancellationToken ct)
     {
         HttpResponseMessage response;

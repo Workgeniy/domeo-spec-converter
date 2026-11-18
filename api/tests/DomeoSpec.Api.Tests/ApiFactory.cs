@@ -40,6 +40,9 @@ public sealed class FakePricing : IPricingEngine
         return Task.FromResult(Info);
     }
 
+    public Task<PriceListPreview> PreviewPriceListAsync(Stream xlsx, string fileName, CancellationToken ct)
+        => Task.FromResult(new PriceListPreview { Source = fileName, Entries = 3, RowsTotal = 8, PeriodFrom = "2023-02-10", PeriodTo = "2025-04-01" });
+
     public Task<PriceListInfo?> GetPriceListAsync(CancellationToken ct) => Task.FromResult(Info);
 
     public Task<IReadOnlyDictionary<string, HistoryPrice>> MatchAsync(IReadOnlyList<MatchRequestItem> items, CancellationToken ct)

@@ -223,6 +223,23 @@ def pricelist_upload(file: UploadFile = File(...), file_name: str | None = Form(
         raise HTTPException(422, f"Не удалось прочитать выгрузку: {exc}") from exc
 
 
+@app.post("/api/pricelist/preview")
+def pricelist_preview(file: UploadFile = File(...), file_name: str | None = Form(None)) -> dict:
+    """Разобрать выгрузку 1С и показать, что распозналось, БЕЗ замены прайса — для предпросмотра."""
+    name = file_name or file.filename or "история.xlsx"
+    if not name.lower().endswith((".xlsx", ".xlsm")):
+        raise HTTPException(400, "Ожидается выгрузка 1С в формате xlsx")
+    content = file.file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "Файл больше 100 МБ")
+    try:
+        return price_lists.preview_from_upload(content, name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(422, f"Не удалось прочитать выгрузку: {exc}") from exc
+
+
 @app.post("/api/pricelist/match", response_model=MatchResponse)
 def pricelist_match(request: MatchRequest) -> MatchResponse:
     if price_lists.matcher is None:

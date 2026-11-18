@@ -44,6 +44,33 @@ class PriceListStore:
         self._set(price_list)
         return self.info()  # type: ignore[return-value]
 
+    def preview_from_upload(self, content: bytes, file_name: str) -> dict:
+        """Разобрать выгрузку и вернуть сводку + примеры позиций БЕЗ сохранения — для предпросмотра."""
+        suffix = Path(file_name).suffix or ".xlsx"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = Path(tmp.name)
+        try:
+            price_list = build_from_file(tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+        price_list.source = file_name
+        data = summary(price_list)
+        data["samples"] = [
+            {
+                "name": e.name,
+                "group": e.group,
+                "count": e.count,
+                "price_min": e.price_min,
+                "price_max": e.price_max,
+                "price_median": e.price_median,
+                "price_last": e.price_last,
+                "last_date": e.last_date.isoformat() if e.last_date else None,
+            }
+            for e in price_list.entries[:15]
+        ]
+        return data
+
     def info(self) -> PriceListInfo | None:
         return PriceListInfo(**summary(self.price_list)) if self.price_list else None
 

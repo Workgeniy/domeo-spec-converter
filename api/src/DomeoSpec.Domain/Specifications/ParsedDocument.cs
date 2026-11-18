@@ -124,6 +124,33 @@ public sealed record PriceListInfo
     public string? PeriodTo { get; init; }
 }
 
+/// <summary>Предпросмотр выгрузки 1С: та же сводка + примеры позиций, БЕЗ замены прайса.</summary>
+public sealed record PriceListPreview
+{
+    public string Source { get; init; } = "";
+    public int RowsTotal { get; init; }
+    public int Entries { get; init; }
+    public int WithTwoOrMore { get; init; }
+    public int Purchases { get; init; }
+    public int Outliers { get; init; }
+    public string? PeriodFrom { get; init; }
+    public string? PeriodTo { get; init; }
+    public IReadOnlyList<PriceListSample> Samples { get; init; } = [];
+}
+
+/// <summary>Пример распознанной позиции прайса для предпросмотра.</summary>
+public sealed record PriceListSample
+{
+    public string Name { get; init; } = "";
+    public string Group { get; init; } = "";
+    public int Count { get; init; }
+    public double? PriceMin { get; init; }
+    public double? PriceMax { get; init; }
+    public double? PriceMedian { get; init; }
+    public double? PriceLast { get; init; }
+    public string? LastDate { get; init; }
+}
+
 public sealed record MatchRequestItem(string Id, string Name, string Description = "", string Unit = "", string Section = "")
 {
     /// <summary>Для поиска в интернете: параметры оператора (материал, цвет…).</summary>
