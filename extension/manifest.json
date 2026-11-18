@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Domeo — цены для спецификации",
-  "version": "0.2.0",
-  "description": "Читает цены на Wildberries, Ozon и Яндекс.Маркете на страницах, которые вы открываете, и переносит их в Domeo. Своих запросов к маркетплейсу не делает.",
+  "version": "0.2.1",
+  "description": "Читает цены на Wildberries, Ozon и Яндекс.Маркете (бизнес, с НДС) на страницах, которые вы открываете, и переносит их в Domeo. Своих запросов к маркетплейсу не делает.",
   "permissions": ["storage"],
   "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
   "background": { "service_worker": "background.js" },
