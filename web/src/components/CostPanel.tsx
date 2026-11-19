@@ -416,33 +416,35 @@ export function CostPanel({ onDownload, downloading }: Props) {
             )}
             {preview.info.samples.length > 0 && (
               <>
-                <Text size="xs" c="dimmed">Примеры распознанных позиций (первые {preview.info.samples.length}):</Text>
-                <Table striped withTableBorder fz="xs">
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th>Позиция</Table.Th>
-                      <Table.Th>Группа</Table.Th>
-                      <Table.Th ta="right">Покупок</Table.Th>
-                      <Table.Th ta="right">Мин</Table.Th>
-                      <Table.Th ta="right">Медиана</Table.Th>
-                      <Table.Th ta="right">Макс</Table.Th>
-                      <Table.Th ta="right">Последняя</Table.Th>
-                    </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {preview.info.samples.map((s, i) => (
-                      <Table.Tr key={i}>
-                        <Table.Td>{s.name}</Table.Td>
-                        <Table.Td>{s.group}</Table.Td>
-                        <Table.Td ta="right">{s.count}</Table.Td>
-                        <Table.Td ta="right">{s.price_min != null ? formatMoney(s.price_min) : '—'}</Table.Td>
-                        <Table.Td ta="right">{s.price_median != null ? formatMoney(s.price_median) : '—'}</Table.Td>
-                        <Table.Td ta="right">{s.price_max != null ? formatMoney(s.price_max) : '—'}</Table.Td>
-                        <Table.Td ta="right">{s.price_last != null ? formatMoney(s.price_last) : '—'}</Table.Td>
+                <Text size="xs" c="dimmed">Распознанные позиции ({preview.info.samples.length}) — пролистайте и проверьте перед загрузкой:</Text>
+                <div style={{ maxHeight: '55vh', overflowY: 'auto' }}>
+                  <Table striped withTableBorder stickyHeader fz="xs">
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th>Позиция</Table.Th>
+                        <Table.Th>Группа</Table.Th>
+                        <Table.Th ta="right">Покупок</Table.Th>
+                        <Table.Th ta="right">Мин</Table.Th>
+                        <Table.Th ta="right">Медиана</Table.Th>
+                        <Table.Th ta="right">Макс</Table.Th>
+                        <Table.Th ta="right">Последняя</Table.Th>
                       </Table.Tr>
-                    ))}
-                  </Table.Tbody>
-                </Table>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {preview.info.samples.map((s, i) => (
+                        <Table.Tr key={i}>
+                          <Table.Td>{s.name}</Table.Td>
+                          <Table.Td>{s.group}</Table.Td>
+                          <Table.Td ta="right">{s.count}</Table.Td>
+                          <Table.Td ta="right">{s.price_min != null ? formatMoney(s.price_min) : '—'}</Table.Td>
+                          <Table.Td ta="right">{s.price_median != null ? formatMoney(s.price_median) : '—'}</Table.Td>
+                          <Table.Td ta="right">{s.price_max != null ? formatMoney(s.price_max) : '—'}</Table.Td>
+                          <Table.Td ta="right">{s.price_last != null ? formatMoney(s.price_last) : '—'}</Table.Td>
+                        </Table.Tr>
+                      ))}
+                    </Table.Tbody>
+                  </Table>
+                </div>
               </>
             )}
             <Group justify="flex-end" mt="sm">

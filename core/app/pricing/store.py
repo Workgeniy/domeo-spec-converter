@@ -67,7 +67,7 @@ class PriceListStore:
                 "price_last": e.price_last,
                 "last_date": e.last_date.isoformat() if e.last_date else None,
             }
-            for e in price_list.entries[:15]
+            for e in price_list.entries  # все распознанные позиции — оператор листает в окне предпросмотра
         ]
         return data
 
